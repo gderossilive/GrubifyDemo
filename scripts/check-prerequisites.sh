@@ -5,13 +5,12 @@ echo "============================================="
 
 EXIT_CODE=0
 
-# Check Docker
-echo -n "Docker Desktop: "
+# Docker is NOT required — images are built remotely in ACR using ACR Tasks
+echo -n "Docker (optional): "
 if docker ps > /dev/null 2>&1; then
-    echo "✅ Running"
+    echo "✅ Running (not required — builds run in ACR)"
 else
-    echo "❌ Not running - Please start Docker Desktop"
-    EXIT_CODE=1
+    echo "ℹ️  Not running — OK, container images are built in Azure Container Registry"
 fi
 
 # Check Azure CLI

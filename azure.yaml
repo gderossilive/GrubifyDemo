@@ -7,11 +7,15 @@ services:
     project: ./GrubifyApi
     language: dotnet
     host: containerapp
+    docker:
+      remoteBuild: true
 
   frontend:
     project: ./grubify-frontend
     language: js
     host: containerapp
+    docker:
+      remoteBuild: true
 
 hooks:
   postdeploy:
