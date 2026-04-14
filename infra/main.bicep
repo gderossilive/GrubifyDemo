@@ -18,9 +18,15 @@ param apiImage string = ''
 @description('Frontend container image')
 param frontendImage string = ''
 
+@description('Resource ID of an existing Container Apps Environment to reuse. Leave empty to provision a new one.')
+param existingContainerAppsEnvironmentId string = ''
+
 var abbrs = loadJsonContent('abbreviations.json')
 var resourceToken = 'grubify'  // Fixed naming instead of random string
 var tags = { 'azd-env-name': environmentName }
+var useExistingEnv = !empty(existingContainerAppsEnvironmentId)
+var existingEnvRg = useExistingEnv ? split(existingContainerAppsEnvironmentId, '/')[4] : 'placeholder'
+var existingEnvName = useExistingEnv ? last(split(existingContainerAppsEnvironmentId, '/')) : 'placeholder'
 
 // Organize resources in a resource group
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
@@ -40,8 +46,8 @@ module containerRegistry 'core/host/container-registry.bicep' = {
   }
 }
 
-// Container Apps Environment
-module containerAppsEnvironment 'core/host/container-apps-environment.bicep' = {
+// Container Apps Environment — provision new or look up existing
+module containerAppsEnvironment 'core/host/container-apps-environment.bicep' = if (!useExistingEnv) {
   name: 'container-apps-environment'
   scope: rg
   params: {
@@ -51,6 +57,18 @@ module containerAppsEnvironment 'core/host/container-apps-environment.bicep' = {
   }
 }
 
+// Look up properties of an existing Container Apps Environment (cross-RG)
+module existingEnvLookup 'core/host/container-apps-environment-existing.bicep' = if (useExistingEnv) {
+  name: 'existing-env-lookup'
+  scope: resourceGroup(existingEnvRg)
+  params: {
+    name: existingEnvName
+  }
+}
+
+var envId = useExistingEnv ? existingContainerAppsEnvironmentId : containerAppsEnvironment.outputs.id
+var envDefaultDomain = useExistingEnv ? existingEnvLookup.outputs.defaultDomain : containerAppsEnvironment.outputs.defaultDomain
+
 // Container app for the API
 module api 'core/host/container-app.bicep' = {
   name: 'api'
@@ -59,7 +77,7 @@ module api 'core/host/container-app.bicep' = {
     name: 'ca-grubify-api'
     location: location
     tags: union(tags, { 'azd-service-name': 'api' })
-    containerAppsEnvironmentName: containerAppsEnvironment.outputs.name
+    containerAppsEnvironmentId: envId
     containerRegistryName: containerRegistry.outputs.name
     containerName: 'grubify-api'
     containerImage: !empty(apiImage) ? apiImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
@@ -74,7 +92,7 @@ module api 'core/host/container-app.bicep' = {
       }
       {
         name: 'AllowedOrigins__0'
-        value: 'https://ca-grubify-frontend.${containerAppsEnvironment.outputs.defaultDomain}'
+        value: 'https://ca-grubify-frontend.${envDefaultDomain}'
       }
     ]
   }
@@ -88,7 +106,7 @@ module frontend 'core/host/container-app.bicep' = {
     name: 'ca-grubify-frontend'
     location: location
     tags: union(tags, { 'azd-service-name': 'frontend' })
-    containerAppsEnvironmentName: containerAppsEnvironment.outputs.name
+    containerAppsEnvironmentId: envId
     containerRegistryName: containerRegistry.outputs.name
     containerName: 'grubify-frontend'
     containerImage: !empty(frontendImage) ? frontendImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'

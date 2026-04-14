@@ -1,0 +1,50 @@
+# Response Plan: Grubify HTTP 5xx Alerts
+#
+# This configures an HTTP trigger in the SRE Agent so that when Azure Monitor
+# fires the HTTP 5xx alert for Grubify, it calls the webhook URL and the
+# incident-handler sub-agent automatically investigates and mitigates.
+#
+# Deployment:
+#   - The deploy script (scripts/deploy-sre-agent.sh) creates this trigger via
+#     POST /api/v1/httptriggers/create and patches the action group webhook.
+#   - The resulting triggerUrl is stored in .azure/sre-trigger-url for reference.
+#
+# Azure Monitor Alert -> Action Group (webhook) -> SRE Agent HTTP Trigger
+#                                                -> incident-handler sub-agent
+
+name: grubify-http-5xx-response-plan
+description: >
+  Automatically triggers the incident-handler agent to investigate and mitigate
+  HTTP 5xx errors in the Grubify Container Apps (frontend + API).
+
+# Which sub-agent handles alerts fired by this trigger.
+# incident-handler will:
+#   1. Search knowledge base for the http-500-errors runbook
+#   2. Query App Insights and Log Analytics for error context
+#   3. Attempt remediation (scale out, restart, config changes)
+#   4. Create a GitHub issue with RCA findings
+agent: incident-handler
+
+# The prompt injected into the thread when the trigger fires.
+# Azure Monitor posts the alert payload as JSON in the request body —
+# the agent receives it as context and should extract resourceId, alertName, etc.
+agentPrompt: |
+  An Azure Monitor alert has fired for the Grubify application.
+  The alert payload in the incoming request contains the affected resource,
+  metric thresholds breached, and timestamps.
+
+  Follow these steps:
+  1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.
+  2. Query App Insights (resource: appi-sre-grubify) for recent request failures,
+     exceptions, and dependencies — use the last 30 minutes window.
+  3. Query the Log Analytics workspace (law-sre-grubify) for container logs
+     from ca-grubify-api and ca-grubify-frontend.
+  4. Identify root cause, then attempt remediation:
+     - If memory pressure: restart the container app revision
+     - If dependency failure: report and escalate
+     - If code error: identify the failing endpoint and log the error stack
+  5. Summarize findings and remediation actions in a clear incident report.
+     Search memory for the "incident report template" and follow it exactly.
+
+# Agent operating mode: autonomous allows writes (restarts, scaling, etc.)
+agentMode: autonomous

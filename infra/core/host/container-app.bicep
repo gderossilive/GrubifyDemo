@@ -2,7 +2,8 @@ param name string
 param location string = resourceGroup().location
 param tags object = {}
 
-param containerAppsEnvironmentName string
+param containerAppsEnvironmentId string
+param workloadProfileName string = ''
 param containerRegistryName string
 param containerName string
 param containerImage string
@@ -14,10 +15,6 @@ param minReplicas int = 1
 param maxReplicas int = 3
 param env array = []
 param activeRevisionsMode string = 'Single'
-
-resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' existing = {
-  name: containerAppsEnvironmentName
-}
 
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' existing = {
   name: containerRegistryName
@@ -52,7 +49,8 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
     }
   }
   properties: {
-    managedEnvironmentId: containerAppsEnvironment.id
+    workloadProfileName: empty(workloadProfileName) ? null : workloadProfileName
+    managedEnvironmentId: containerAppsEnvironmentId
     configuration: {
       activeRevisionsMode: activeRevisionsMode
       ingress: {

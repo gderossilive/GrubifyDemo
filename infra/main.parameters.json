@@ -16,6 +16,9 @@
     },
     "frontendImage": {
       "value": "${SERVICE_FRONTEND_IMAGE_NAME}"
+    },
+    "existingContainerAppsEnvironmentId": {
+      "value": "${AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
     }
   }
 }
