@@ -49,20 +49,22 @@ The demo deploys one primary alert for this scenario:
 - Severity: `3`
 - Alert name pattern: `alert-http-5xx-${environmentName}`
 
-### Most Likely Root Cause In This Lab
+### Historical Root Cause Pattern In This Lab
 
-The primary intentional failure path is in:
+A common intentional failure path in this lab has been the cart endpoint in:
 
 - `src/grubify/GrubifyApi/Controllers/CartController.cs`
 
-The `POST /api/cart/{userId}/items` endpoint allocates and retains a new `10 MB` byte array on every request:
+In some deployments, `POST /api/cart/{userId}/items` allocates and retains a new `10 MB` byte array on every request:
 
 ```csharp
 var requestData = new byte[10 * 1024 * 1024];
 RequestDataCache.Add(requestData);
 ```
 
-Repeated requests to `/api/cart/demo-user/items` cause steady memory growth until the API starts returning HTTP 5xx and may restart under memory pressure.
+Repeated requests to `/api/cart/demo-user/items` can then cause steady memory growth until the API starts returning HTTP 5xx and may restart under memory pressure.
+
+Important: do not assume the checked-in branch always matches the running image. If live logs, stack traces, or deployed revision behavior disagree with the repository contents, trust the runtime evidence first and capture the source/runtime drift in the incident notes.
 
 ### Important Endpoint Notes
 
@@ -252,15 +254,16 @@ For this lab, source correlation should start with the local vendored repo and, 
 
 ### Primary Root Cause Candidate
 
-Inspect `CartController.AddItemToCart` first.
+Inspect `CartController.AddItemToCart` first, but validate it against the running revision before assuming the checked-in file is authoritative.
 
 What to look for:
 
 1. Static mutable state that survives across requests.
 2. Request-scoped buffers retained indefinitely.
 3. Console logs proving cache growth.
+4. Stack traces or line numbers from the running image that may not match the current branch.
 
-This lab’s main intentional fault satisfies all three.
+If the deployed image shows OOMs or cache-growth logs on the cart path but the checked-in source does not, treat that as source/runtime drift and document both facts explicitly.
 
 ### Optional GitHub Correlation
 
@@ -356,7 +359,8 @@ exceptions
 | Memory trend | `WorkingSetBytes` and `MemoryPercentage` rise before or during errors |
 | Restart evidence | `RestartCount` increases or system logs show restart/OOM events |
 | Cart leak evidence | Logs show `Analytics cache` or `Cache size` growth |
-| Source correlation | `CartController.AddItemToCart` retains `10 MB` buffers in static memory |
+| Source correlation | `CartController.AddItemToCart` or the deployed image stack trace explains the failure path |
+| Source/runtime drift | Live logs and line numbers may be valid even if the checked-in branch no longer shows the same leak |
 | GitHub path | If MCP is configured, file/update issue in `dm-chelupati/grubify` |
 
 ---
