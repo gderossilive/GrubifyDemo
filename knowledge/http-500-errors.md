@@ -324,6 +324,12 @@ If the incident pattern is clearly memory pressure and a temporary config change
 
 Do not default to rollback for this scenario. The common failure in this lab is not a generic bad deploy. It is an intentional code-level leak triggered through `/api/cart/demo-user/items`.
 
+### Post-Mitigation Verification Nuances
+
+- Prefer direct endpoint checks after a restart; health helpers can lag or report false negatives briefly while ingress recovers.
+- Verify both read-only endpoints and the cart POST path before declaring recovery.
+- If an alert-close helper reports success ambiguously, re-check the Azure Monitor alert state explicitly and use Alerts Management state change APIs if the alert remains open.
+
 ---
 
 ## Phase 7: App Insights Queries Are Optional Only
@@ -368,7 +374,8 @@ exceptions
 | Cart leak evidence | Logs show `Analytics cache` or `Cache size` growth |
 | Source correlation | `CartController.AddItemToCart` or the deployed image stack trace explains the failure path |
 | Source/runtime drift | Live logs and line numbers may be valid even if the checked-in branch no longer shows the same leak |
-| GitHub path | If MCP is configured, file/update issue in `dm-chelupati/grubify` |
+| Alert state | Recovery verification includes checking the Azure Monitor alert state, not just app health |
+| GitHub path | If GitHub integration is configured, file/update the issue in the active GrubifyDemo repo |
 
 ---
 
@@ -404,8 +411,9 @@ When closing the incident or creating a GitHub issue, include:
 3. Evidence from `AzureMetrics` showing memory growth and any restarts.
 4. Evidence from `ContainerAppConsoleLogs_CL` or `ContainerAppSystemLogs_CL`.
 5. Endpoint-level symptom, especially whether `/api/cart/demo-user/items` failed first.
-6. Root cause tied to `CartController.AddItemToCart` and the retained `10 MB` request buffers.
+6. Root cause tied to `CartController.AddItemToCart`, or an explicit note that runtime evidence differed from the checked-in branch.
 7. Immediate mitigation taken, if any.
-8. Follow-up code fix recommendation.
+8. Final alert state verification after mitigation.
+9. Follow-up code fix recommendation.
 
-That is the correct investigation path for HTTP 500 incidents in the Grubify Incident Lab as currently implemented in this repository.
+That is the correct investigation path for HTTP 500 incidents in the GrubifyDemo repository as currently implemented.
