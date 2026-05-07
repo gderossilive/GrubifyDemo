@@ -4,25 +4,26 @@
 `500 error`, `internal server error`, `HTTP 500`, `server error`, `application error`, `memory leak`, `OOM`, `cart API`
 
 ## Scope
-This runbook is for the actual Grubify Incident Lab in `demos/GrubifyIncidentLab`.
+This runbook is for the Grubify demo application in this repository root.
 
-Use it when the backend Azure Container App deployed by this lab starts returning HTTP 5xx and Azure Monitor routes the incident to the SRE Agent.
+Use it when the backend Azure Container App starts returning HTTP 5xx and Azure Monitor routes the incident to the SRE Agent.
 
 This runbook is tied to:
 
-- Azure deployment: `demos/GrubifyIncidentLab/azure.yaml`
-- Infrastructure: `demos/GrubifyIncidentLab/infrastructure/`
-- Post-provision automation: `demos/GrubifyIncidentLab/scripts/post-provision.sh`
-- Application source: `demos/GrubifyIncidentLab/src/grubify`
-- Upstream GitHub repository: `https://github.com/dm-chelupati/grubify.git`
+- Azure deployment: `azure.yaml`
+- Infrastructure: `infra/`
+- SRE Agent deployment automation: `scripts/deploy-sre-agent.sh`
+- Backend application source: `GrubifyApi/`
+- Frontend application source: `grubify-frontend/`
+- Upstream GitHub repository: `https://github.com/gderossilive/GrubifyDemo`
 
-This lab primarily uses:
+This demo primarily uses:
 
 - Azure Monitor resource metrics
 - Log Analytics tables for Azure Container Apps
 - Container Apps control plane and logs
 
-Do not assume rich application telemetry in Application Insights for the Grubify API. In the current implementation, Application Insights is wired to SRE Agent logging, not to full app request/dependency instrumentation.
+Do not assume rich application telemetry in Application Insights for the Grubify API. In the current implementation, Application Insights is primarily wired to SRE Agent logging, not to full app request, dependency, or exception instrumentation for the application.
 
 ---
 
@@ -32,37 +33,39 @@ Do not assume rich application telemetry in Application Insights for the Grubify
 
 - Backend: ASP.NET Core Web API
 - Frontend: React
-- Backend Container App name pattern: `ca-grubify-${uniqueSuffix}`
-- Frontend Container App name pattern: `ca-grubify-fe-${uniqueSuffix}`
-- Container Apps environment name pattern: `cae-${uniqueSuffix}`
-- Resource group name pattern: `rg-${environmentName}`
+- Backend Container App: `ca-grubify-api`
+- Frontend Container App: `ca-grubify-frontend`
+- Resource group: `rg-grubify-app`
+- Container Apps environment: often reused from an existing environment; resolve the actual managed environment and Log Analytics workspace at investigation time
 
 ### Active Alert Configuration
 
 The demo deploys one primary alert for this scenario:
 
-- Resource: backend Container App
+- Resource: backend Container App (`ca-grubify-api`)
 - Metric namespace: `microsoft.app/containerapps`
 - Metric: `Requests`
 - Dimension: `statusCodeCategory = 5xx`
 - Threshold: `> 5` in `5` minutes
-- Severity: `3`
-- Alert name pattern: `alert-http-5xx-${environmentName}`
+- Severity: `2`
+- Alert name: `alert-http-5xx-grubify`
 
-### Most Likely Root Cause In This Lab
+### Historical Root Cause Pattern In This Lab
 
-The primary intentional failure path is in:
+A common intentional failure path in this lab has been the cart endpoint in:
 
-- `src/grubify/GrubifyApi/Controllers/CartController.cs`
+- `GrubifyApi/Controllers/CartController.cs`
 
-The `POST /api/cart/{userId}/items` endpoint allocates and retains a new `10 MB` byte array on every request:
+In some deployments, `POST /api/cart/{userId}/items` allocates and retains a new `10 MB` byte array on every request:
 
 ```csharp
 var requestData = new byte[10 * 1024 * 1024];
 RequestDataCache.Add(requestData);
 ```
 
-Repeated requests to `/api/cart/demo-user/items` cause steady memory growth until the API starts returning HTTP 5xx and may restart under memory pressure.
+Repeated requests to `/api/cart/demo-user/items` can then cause steady memory growth until the API starts returning HTTP 5xx and may restart under memory pressure.
+
+Important: do not assume the checked-in branch always matches the running image. If live logs, stack traces, or deployed revision behavior disagree with the repository contents, trust the runtime evidence first and capture the source/runtime drift in the incident notes.
 
 ### Important Endpoint Notes
 
@@ -94,32 +97,38 @@ Use only these metric names with `az monitor metrics list`:
 
 ## Phase 1: Identify The Actual Backend Resource
 
-Resolve the current environment values first. The lab writes them into the azd environment.
+Resolve the current environment values first. This repository's `azd` deployment writes the resource group and URLs into the environment, while the app names are fixed in Bicep.
 
 ```bash
-cd demos/GrubifyIncidentLab
+cd GrubifyDemo
 
 azd env get-value AZURE_RESOURCE_GROUP
-azd env get-value CONTAINER_APP_NAME
-azd env get-value CONTAINER_APP_URL
-azd env get-value FRONTEND_APP_NAME
-azd env get-value SRE_AGENT_NAME
-azd env get-value SRE_AGENT_ENDPOINT
+azd env get-value API_BASE_URL
+azd env get-value FRONTEND_URL
 ```
 
 You should expect values shaped like:
 
-- Resource group: `rg-<environmentName>`
-- Backend app: `ca-grubify-<suffix>`
-- Frontend app: `ca-grubify-fe-<suffix>`
+- Resource group: `rg-grubify-app`
+- Backend app: `ca-grubify-api`
+- Frontend app: `ca-grubify-frontend`
 
 Get the backend resource ID because it is needed for metrics queries:
 
 ```bash
 RG=$(azd env get-value AZURE_RESOURCE_GROUP)
-APP=$(azd env get-value CONTAINER_APP_NAME)
+APP=ca-grubify-api
+FRONTEND=ca-grubify-frontend
 
 az containerapp show -g "$RG" -n "$APP" --query id -o tsv
+az containerapp show -g "$RG" -n "$FRONTEND" --query id -o tsv
+```
+
+If the `azd` environment is unavailable, fall back to the fixed resource group and list the apps directly:
+
+```bash
+RG=rg-grubify-app
+az containerapp list -g "$RG" -o table
 ```
 
 ---
@@ -243,31 +252,32 @@ ContainerAppConsoleLogs_CL
 
 ## Phase 5: Correlate The Failure To Source Code
 
-For this lab, source correlation should start with the local vendored repo and, if enabled, continue to GitHub.
+For this demo, source correlation should start with the local repository checkout and, if enabled, continue to GitHub.
 
 ### Local Source Paths
 
-- Backend API: `demos/GrubifyIncidentLab/src/grubify/GrubifyApi`
-- Leak implementation: `demos/GrubifyIncidentLab/src/grubify/GrubifyApi/Controllers/CartController.cs`
+- Backend API: `GrubifyApi/`
+- Leak implementation: `GrubifyApi/Controllers/CartController.cs`
 
 ### Primary Root Cause Candidate
 
-Inspect `CartController.AddItemToCart` first.
+Inspect `CartController.AddItemToCart` first, but validate it against the running revision before assuming the checked-in file is authoritative.
 
 What to look for:
 
 1. Static mutable state that survives across requests.
 2. Request-scoped buffers retained indefinitely.
 3. Console logs proving cache growth.
+4. Stack traces or line numbers from the running image that may not match the current branch.
 
-This lab’s main intentional fault satisfies all three.
+If the deployed image shows OOMs or cache-growth logs on the cart path but the checked-in source does not, treat that as source/runtime drift and document both facts explicitly.
 
 ### Optional GitHub Correlation
 
-If GitHub PAT was configured during post-provisioning, the agent may have:
+If GitHub integration was configured during agent deployment, the agent may have:
 
-- GitHub MCP connector: `github-mcp`
-- Repository target: `dm-chelupati/grubify` by default
+- GitHub connector support for this repository
+- Repository target: `gderossilive/GrubifyDemo`
 - GitHub-aware subagents: `incident-handler`, `code-analyzer`, `issue-triager`
 
 In that case, create or update a GitHub issue against the remote repository with:
@@ -314,6 +324,12 @@ If the incident pattern is clearly memory pressure and a temporary config change
 
 Do not default to rollback for this scenario. The common failure in this lab is not a generic bad deploy. It is an intentional code-level leak triggered through `/api/cart/demo-user/items`.
 
+### Post-Mitigation Verification Nuances
+
+- Prefer direct endpoint checks after a restart; health helpers can lag or report false negatives briefly while ingress recovers.
+- Verify both read-only endpoints and the cart POST path before declaring recovery.
+- If an alert-close helper reports success ambiguously, re-check the Azure Monitor alert state explicitly and use Alerts Management state change APIs if the alert remains open.
+
 ---
 
 ## Phase 7: App Insights Queries Are Optional Only
@@ -356,8 +372,10 @@ exceptions
 | Memory trend | `WorkingSetBytes` and `MemoryPercentage` rise before or during errors |
 | Restart evidence | `RestartCount` increases or system logs show restart/OOM events |
 | Cart leak evidence | Logs show `Analytics cache` or `Cache size` growth |
-| Source correlation | `CartController.AddItemToCart` retains `10 MB` buffers in static memory |
-| GitHub path | If MCP is configured, file/update issue in `dm-chelupati/grubify` |
+| Source correlation | `CartController.AddItemToCart` or the deployed image stack trace explains the failure path |
+| Source/runtime drift | Live logs and line numbers may be valid even if the checked-in branch no longer shows the same leak |
+| Alert state | Recovery verification includes checking the Azure Monitor alert state, not just app health |
+| GitHub path | If GitHub integration is configured, file/update the issue in the active GrubifyDemo repo |
 
 ---
 
@@ -393,8 +411,9 @@ When closing the incident or creating a GitHub issue, include:
 3. Evidence from `AzureMetrics` showing memory growth and any restarts.
 4. Evidence from `ContainerAppConsoleLogs_CL` or `ContainerAppSystemLogs_CL`.
 5. Endpoint-level symptom, especially whether `/api/cart/demo-user/items` failed first.
-6. Root cause tied to `CartController.AddItemToCart` and the retained `10 MB` request buffers.
+6. Root cause tied to `CartController.AddItemToCart`, or an explicit note that runtime evidence differed from the checked-in branch.
 7. Immediate mitigation taken, if any.
-8. Follow-up code fix recommendation.
+8. Final alert state verification after mitigation.
+9. Follow-up code fix recommendation.
 
-That is the correct investigation path for HTTP 500 incidents in the Grubify Incident Lab as currently implemented in this repository.
+That is the correct investigation path for HTTP 500 incidents in the GrubifyDemo repository as currently implemented.
