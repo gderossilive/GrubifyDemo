@@ -15,14 +15,15 @@
 name: grubify-http-5xx-response-plan
 description: >
   Automatically triggers the incident-handler agent to investigate and mitigate
-  HTTP 5xx errors in the Grubify Container Apps (frontend + API).
+  HTTP 5xx errors from the Grubify backend Container App, while checking the
+  frontend only for blast-radius validation.
 
 # Which sub-agent handles alerts fired by this trigger.
 # incident-handler will:
 #   1. Search knowledge base for the http-500-errors runbook
-#   2. Query App Insights and Log Analytics for error context
-#   3. Attempt remediation (scale out, restart, config changes)
-#   4. Create a GitHub issue with RCA findings
+#   2. Discover the actual Container Apps environment and connected Log Analytics workspace
+#   3. Attempt remediation (restart, scale out, or escalation depending on evidence)
+#   4. Summarize findings and follow-up actions
 agent: incident-handler
 
 # The prompt injected into the thread when the trigger fires.
@@ -35,15 +36,20 @@ agentPrompt: |
 
   Follow these steps:
   1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.
-  2. Query App Insights (resource: appi-sre-grubify) for recent request failures,
-     exceptions, and dependencies — use the last 30 minutes window.
-  3. Query the Log Analytics workspace (law-sre-grubify) for container logs
-     from ca-grubify-api and ca-grubify-frontend.
-  4. Identify root cause, then attempt remediation:
-     - If memory pressure: restart the container app revision
-     - If dependency failure: report and escalate
-     - If code error: identify the failing endpoint and log the error stack
-  5. Summarize findings and remediation actions in a clear incident report.
+  2. Use the alert resourceId to identify the impacted Container App. Prioritize
+     `ca-grubify-api` in `rg-grubify-app`, and check `ca-grubify-frontend` only
+     to confirm whether impact extends beyond the backend.
+  3. Discover the actual Container Apps environment and connected Log Analytics
+     workspace, then query `ContainerAppConsoleLogs_CL` and `ContainerAppSystemLogs_CL`
+     for the affected Grubify revisions over the last 30 minutes.
+  4. Treat Application Insights as supplemental only. It stores SRE Agent telemetry,
+     not full Grubify application request, dependency, or exception telemetry.
+  5. Identify root cause, then attempt remediation:
+     - If memory pressure or OOM evidence exists: restart the active revision
+     - If the app remains unstable after restart: temporarily increase replica headroom
+     - If dependency failure or broader platform failure is indicated: report and escalate
+     - If code error is indicated: identify the failing endpoint and capture the stack trace
+  6. Summarize findings and remediation actions in a clear incident report.
      Search memory for the "incident report template" and follow it exactly.
 
 # Agent operating mode: autonomous allows writes (restarts, scaling, etc.)

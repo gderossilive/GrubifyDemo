@@ -4,25 +4,26 @@
 `500 error`, `internal server error`, `HTTP 500`, `server error`, `application error`, `memory leak`, `OOM`, `cart API`
 
 ## Scope
-This runbook is for the actual Grubify Incident Lab in `demos/GrubifyIncidentLab`.
+This runbook is for the Grubify demo application in this repository root.
 
-Use it when the backend Azure Container App deployed by this lab starts returning HTTP 5xx and Azure Monitor routes the incident to the SRE Agent.
+Use it when the backend Azure Container App starts returning HTTP 5xx and Azure Monitor routes the incident to the SRE Agent.
 
 This runbook is tied to:
 
-- Azure deployment: `demos/GrubifyIncidentLab/azure.yaml`
-- Infrastructure: `demos/GrubifyIncidentLab/infrastructure/`
-- Post-provision automation: `demos/GrubifyIncidentLab/scripts/post-provision.sh`
-- Application source: `demos/GrubifyIncidentLab/src/grubify`
-- Upstream GitHub repository: `https://github.com/dm-chelupati/grubify.git`
+- Azure deployment: `azure.yaml`
+- Infrastructure: `infra/`
+- SRE Agent deployment automation: `scripts/deploy-sre-agent.sh`
+- Backend application source: `GrubifyApi/`
+- Frontend application source: `grubify-frontend/`
+- Upstream GitHub repository: `https://github.com/gderossilive/GrubifyDemo`
 
-This lab primarily uses:
+This demo primarily uses:
 
 - Azure Monitor resource metrics
 - Log Analytics tables for Azure Container Apps
 - Container Apps control plane and logs
 
-Do not assume rich application telemetry in Application Insights for the Grubify API. In the current implementation, Application Insights is wired to SRE Agent logging, not to full app request/dependency instrumentation.
+Do not assume rich application telemetry in Application Insights for the Grubify API. In the current implementation, Application Insights is primarily wired to SRE Agent logging, not to full app request, dependency, or exception instrumentation for the application.
 
 ---
 
@@ -32,28 +33,28 @@ Do not assume rich application telemetry in Application Insights for the Grubify
 
 - Backend: ASP.NET Core Web API
 - Frontend: React
-- Backend Container App name pattern: `ca-grubify-${uniqueSuffix}`
-- Frontend Container App name pattern: `ca-grubify-fe-${uniqueSuffix}`
-- Container Apps environment name pattern: `cae-${uniqueSuffix}`
-- Resource group name pattern: `rg-${environmentName}`
+- Backend Container App: `ca-grubify-api`
+- Frontend Container App: `ca-grubify-frontend`
+- Resource group: `rg-grubify-app`
+- Container Apps environment: often reused from an existing environment; resolve the actual managed environment and Log Analytics workspace at investigation time
 
 ### Active Alert Configuration
 
 The demo deploys one primary alert for this scenario:
 
-- Resource: backend Container App
+- Resource: backend Container App (`ca-grubify-api`)
 - Metric namespace: `microsoft.app/containerapps`
 - Metric: `Requests`
 - Dimension: `statusCodeCategory = 5xx`
 - Threshold: `> 5` in `5` minutes
-- Severity: `3`
-- Alert name pattern: `alert-http-5xx-${environmentName}`
+- Severity: `2`
+- Alert name: `alert-http-5xx-grubify`
 
 ### Historical Root Cause Pattern In This Lab
 
 A common intentional failure path in this lab has been the cart endpoint in:
 
-- `src/grubify/GrubifyApi/Controllers/CartController.cs`
+- `GrubifyApi/Controllers/CartController.cs`
 
 In some deployments, `POST /api/cart/{userId}/items` allocates and retains a new `10 MB` byte array on every request:
 
@@ -96,32 +97,38 @@ Use only these metric names with `az monitor metrics list`:
 
 ## Phase 1: Identify The Actual Backend Resource
 
-Resolve the current environment values first. The lab writes them into the azd environment.
+Resolve the current environment values first. This repository's `azd` deployment writes the resource group and URLs into the environment, while the app names are fixed in Bicep.
 
 ```bash
-cd demos/GrubifyIncidentLab
+cd GrubifyDemo
 
 azd env get-value AZURE_RESOURCE_GROUP
-azd env get-value CONTAINER_APP_NAME
-azd env get-value CONTAINER_APP_URL
-azd env get-value FRONTEND_APP_NAME
-azd env get-value SRE_AGENT_NAME
-azd env get-value SRE_AGENT_ENDPOINT
+azd env get-value API_BASE_URL
+azd env get-value FRONTEND_URL
 ```
 
 You should expect values shaped like:
 
-- Resource group: `rg-<environmentName>`
-- Backend app: `ca-grubify-<suffix>`
-- Frontend app: `ca-grubify-fe-<suffix>`
+- Resource group: `rg-grubify-app`
+- Backend app: `ca-grubify-api`
+- Frontend app: `ca-grubify-frontend`
 
 Get the backend resource ID because it is needed for metrics queries:
 
 ```bash
 RG=$(azd env get-value AZURE_RESOURCE_GROUP)
-APP=$(azd env get-value CONTAINER_APP_NAME)
+APP=ca-grubify-api
+FRONTEND=ca-grubify-frontend
 
 az containerapp show -g "$RG" -n "$APP" --query id -o tsv
+az containerapp show -g "$RG" -n "$FRONTEND" --query id -o tsv
+```
+
+If the `azd` environment is unavailable, fall back to the fixed resource group and list the apps directly:
+
+```bash
+RG=rg-grubify-app
+az containerapp list -g "$RG" -o table
 ```
 
 ---
@@ -245,12 +252,12 @@ ContainerAppConsoleLogs_CL
 
 ## Phase 5: Correlate The Failure To Source Code
 
-For this lab, source correlation should start with the local vendored repo and, if enabled, continue to GitHub.
+For this demo, source correlation should start with the local repository checkout and, if enabled, continue to GitHub.
 
 ### Local Source Paths
 
-- Backend API: `demos/GrubifyIncidentLab/src/grubify/GrubifyApi`
-- Leak implementation: `demos/GrubifyIncidentLab/src/grubify/GrubifyApi/Controllers/CartController.cs`
+- Backend API: `GrubifyApi/`
+- Leak implementation: `GrubifyApi/Controllers/CartController.cs`
 
 ### Primary Root Cause Candidate
 
@@ -267,10 +274,10 @@ If the deployed image shows OOMs or cache-growth logs on the cart path but the c
 
 ### Optional GitHub Correlation
 
-If GitHub PAT was configured during post-provisioning, the agent may have:
+If GitHub integration was configured during agent deployment, the agent may have:
 
-- GitHub MCP connector: `github-mcp`
-- Repository target: `dm-chelupati/grubify` by default
+- GitHub connector support for this repository
+- Repository target: `gderossilive/GrubifyDemo`
 - GitHub-aware subagents: `incident-handler`, `code-analyzer`, `issue-triager`
 
 In that case, create or update a GitHub issue against the remote repository with:
