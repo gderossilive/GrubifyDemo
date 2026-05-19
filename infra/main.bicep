@@ -12,6 +12,11 @@ param location string
 @description('Name of the resource group')
 param resourceGroupName string = ''
 
+@minLength(5)
+@maxLength(5)
+@description('Five-character lowercase alphanumeric token used to make a Grubify deployment unique.')
+param resourceToken string = take(toLower(uniqueString(environmentName)), 5)
+
 @description('API container image')
 param apiImage string = ''
 
@@ -22,7 +27,6 @@ param frontendImage string = ''
 param existingContainerAppsEnvironmentId string = ''
 
 var abbrs = loadJsonContent('abbreviations.json')
-var resourceToken = 'grubify'  // Fixed naming instead of random string
 var tags = { 'azd-env-name': environmentName }
 var useExistingEnv = !empty(existingContainerAppsEnvironmentId)
 var existingEnvRg = useExistingEnv ? split(existingContainerAppsEnvironmentId, '/')[4] : 'placeholder'
@@ -30,7 +34,7 @@ var existingEnvName = useExistingEnv ? last(split(existingContainerAppsEnvironme
 
 // Organize resources in a resource group
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: !empty(resourceGroupName) ? resourceGroupName : 'rg-grubify-app'
+  name: !empty(resourceGroupName) ? resourceGroupName : 'rg-grubify-app-${resourceToken}'
   location: location
   tags: tags
 }
@@ -74,7 +78,7 @@ module api 'core/host/container-app.bicep' = {
   name: 'api'
   scope: rg
   params: {
-    name: 'ca-grubify-api'
+    name: 'ca-grubify-api-${resourceToken}'
     location: location
     tags: union(tags, { 'azd-service-name': 'api' })
     containerAppsEnvironmentId: envId
@@ -92,7 +96,7 @@ module api 'core/host/container-app.bicep' = {
       }
       {
         name: 'AllowedOrigins__0'
-        value: 'https://ca-grubify-frontend.${envDefaultDomain}'
+        value: 'https://ca-grubify-frontend-${resourceToken}.${envDefaultDomain}'
       }
     ]
   }
@@ -103,7 +107,7 @@ module frontend 'core/host/container-app.bicep' = {
   name: 'frontend'
   scope: rg
   params: {
-    name: 'ca-grubify-frontend'
+    name: 'ca-grubify-frontend-${resourceToken}'
     location: location
     tags: union(tags, { 'azd-service-name': 'frontend' })
     containerAppsEnvironmentId: envId

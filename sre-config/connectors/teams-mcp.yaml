@@ -4,18 +4,14 @@
 # and grant Application permission: ChannelMessage.Send (Microsoft Graph), then admin-consent.
 #
 # Target channel:
-#   Team (Group) ID : 231764ec-b797-41aa-988e-5a9a4c3bd49d
+#   Team (Group) ID : TEAMS_GROUP_ID_PLACEHOLDER
 #   Channel         : GrubifyOps
-#   Channel ID      : 19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2
-#   Tenant ID       : 86d068c0-1c9f-4b9e-939d-15146ccf2ad6
+#   Channel ID      : TEAMS_CHANNEL_ID_PLACEHOLDER
+#   Tenant ID       : TEAMS_TENANT_ID_PLACEHOLDER
 #
-# After applying this connector, run the manual auth step:
-#   AGENT=https://sre-agent-grubify--31f8fc4f.62f83535.swedencentral.azuresre.ai
-#   TOKEN=$(az account get-access-token --query accessToken -o tsv)
-#   curl -X PATCH "$AGENT/api/v1/connectors/teams-mcp/auth" \
-#     -H "Authorization: Bearer $TOKEN" \
-#     -H "Content-Type: application/json" \
-#     -d '{"client_id":"<your-client-id>","client_secret":"<your-client-secret>"}'
+# Apply and authenticate this connector in the SRE Agent portal when Teams
+# notifications are enabled. The current preview API lists data connectors but
+# does not expose a supported connector create/auth endpoint for this YAML.
 api_version: azuresre.ai/v1
 kind: DataConnector
 spec:
@@ -25,7 +21,7 @@ spec:
   auth:
     type: OAuth
     grant_type: client_credentials
-    token_url: https://login.microsoftonline.com/86d068c0-1c9f-4b9e-939d-15146ccf2ad6/oauth2/v2.0/token
+    token_url: https://login.microsoftonline.com/TEAMS_TENANT_ID_PLACEHOLDER/oauth2/v2.0/token
     scopes:
       - https://graph.microsoft.com/.default
     credentials: pending_manual_setup

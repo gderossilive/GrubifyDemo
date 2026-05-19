@@ -17,6 +17,18 @@ spec:
     empty or skip the References section. Include full ARM resource IDs,
     workspace IDs, and App Insights resource IDs in References.
 
+    Some incidents are routed through the Grubify ServiceNow Azure Resource
+    Handler before reaching you. When the trigger payload includes a
+    serviceNow object, treat it as the system-of-record incident and include
+    serviceNow.number, serviceNow.sysId, and serviceNow.url in the GitHub issue,
+    Teams message, and final report. Use AcknowledgeServiceNowIncident at the
+    start when the incident number is present. After diagnosis, use
+    PostServiceNowDiscussionEntry to add the root cause, key evidence, GitHub
+    issue link, and remediation actions. If remediation succeeds and impact has
+    cleared, use ResolveServiceNowIncident with a concise closure note. If any
+    ServiceNow tool is unavailable, continue the investigation and include the
+    ServiceNow link in your final report.
+
     After creating the GitHub issue, also post a concise summary of your
     findings and evidence to the GrubifyOps Microsoft Teams channel using
     the teams-mcp tool (Microsoft Graph API — sendChatMessage or
@@ -36,6 +48,10 @@ spec:
     - QueryLogAnalyticsByWorkspaceId
     - QueryAppInsightsByResourceId
     - ExecutePythonCode
+    - AcknowledgeServiceNowIncident
+    - GetServiceNowIncident
+    - PostServiceNowDiscussionEntry
+    - ResolveServiceNowIncident
   mcp_tools:
     - github-mcp/*
     - teams-mcp/*

@@ -1,15 +1,11 @@
 #!/bin/bash
 # deploy-sre-agent.sh
-# Deploys a brand-new SRE Agent for Grubify, wiring it to:
-#   - The rg-grubify-app Container Apps (API + Frontend)
-#   - Application Insights (created fresh)
-#   - HTTP 5xx alert → SRE Agent action group
-#   - Azure Monitor incident management
-# Usage: ./scripts/deploy-sre-agent.sh
+# Deploys a Grubify SRE Agent and wires it to Azure Monitor alerts, knowledge,
+# core sub-agents, incident response filters, and optional ServiceNow/Teams paths.
 
 set -euo pipefail
 
-# ── Load environment ──────────────────────────────────────────────────────────
+# -- Load environment ----------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/../.env"
 if [[ -f "$ENV_FILE" ]]; then
@@ -21,8 +17,24 @@ fi
 
 SUBSCRIPTION="${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID in .env}"
 LOCATION="${AZURE_LOCATION:-swedencentral}"
-APP_RG="rg-grubify-app"
-SRE_RG="rg-grubify-sre"
+RESOURCE_TOKEN_FILE="${SCRIPT_DIR}/../.azure/resource-token"
+RESOURCE_TOKEN="${GRUBIFY_RESOURCE_TOKEN:-${RESOURCE_TOKEN:-}}"
+if [[ -z "$RESOURCE_TOKEN" && -f "$RESOURCE_TOKEN_FILE" ]]; then
+  RESOURCE_TOKEN=$(<"$RESOURCE_TOKEN_FILE")
+fi
+if [[ -z "$RESOURCE_TOKEN" ]]; then
+  mkdir -p "${SCRIPT_DIR}/../.azure"
+  RESOURCE_TOKEN=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 5 || true)
+  echo "$RESOURCE_TOKEN" > "$RESOURCE_TOKEN_FILE"
+fi
+if [[ ! "$RESOURCE_TOKEN" =~ ^[a-z0-9]{5}$ ]]; then
+  echo "Resource token must be exactly 5 lowercase letters or digits. Current value: $RESOURCE_TOKEN" >&2
+  echo "Set GRUBIFY_RESOURCE_TOKEN in .env or delete $RESOURCE_TOKEN_FILE to regenerate it." >&2
+  exit 1
+fi
+
+APP_RG="${APP_RG:-rg-grubify-app-${RESOURCE_TOKEN}}"
+SRE_RG="${SRE_RG:-rg-grubify-sre-${RESOURCE_TOKEN}}"
 SUFFIX="grubify"
 AGENT_NAME="sre-agent-${SUFFIX}"
 IDENTITY_NAME="id-sre-${SUFFIX}"
@@ -31,28 +43,279 @@ LAW_NAME="law-sre-${SUFFIX}"
 ACTION_GROUP_NAME="ag-sre-${SUFFIX}"
 ALERT_NAME="alert-http-5xx-${SUFFIX}"
 NOTIFICATION_EMAIL="${INCIDENT_NOTIFICATION_EMAIL:-${AZURE_NOTIFICATION_EMAIL:-}}"
-GITHUB_REPO_OWNER="${GITHUB_REPO_OWNER:-gderossilive}"
-GITHUB_REPO_NAME="${GITHUB_REPO_NAME:-GrubifyDemo}"
+GITHUB_REPO="${GITHUB_REPO:-}"
+if [[ -n "$GITHUB_REPO" && "$GITHUB_REPO" == */* ]]; then
+  GITHUB_REPO_OWNER="${GITHUB_REPO%%/*}"
+  GITHUB_REPO_NAME="${GITHUB_REPO#*/}"
+else
+  GITHUB_REPO_OWNER="${GITHUB_REPO_OWNER:-${GITHUB_USER:-gderossilive}}"
+  GITHUB_REPO_NAME="${GITHUB_REPO_NAME:-GrubifyDemo}"
+fi
+GITHUB_ACCESS_TOKEN="${GITHUB_PAT:-${GITHUB_TOKEN:-}}"
+ENABLE_SERVICENOW_HANDLER="${ENABLE_SERVICENOW_HANDLER:-false}"
+SERVICENOW_INSTANCE_URL="${SERVICENOW_INSTANCE_URL:-}"
+SERVICENOW_USERNAME="${SERVICENOW_USERNAME:-}"
+SERVICENOW_PASSWORD="${SERVICENOW_PASSWORD:-}"
+SERVICENOW_ASSIGNMENT_GROUP="${SERVICENOW_ASSIGNMENT_GROUP:-}"
+SERVICENOW_CATEGORY="${SERVICENOW_CATEGORY:-software}"
+SERVICENOW_LOGIC_APP_NAME="${SERVICENOW_LOGIC_APP_NAME:-la-grubify-servicenow-handler}"
+ENABLE_TEAMS_CONNECTOR="${ENABLE_TEAMS_CONNECTOR:-false}"
+TEAMS_TENANT_ID="${TEAMS_TENANT_ID:-86d068c0-1c9f-4b9e-939d-15146ccf2ad6}"
+TEAMS_GROUP_ID="${TEAMS_GROUP_ID:-231764ec-b797-41aa-988e-5a9a4c3bd49d}"
+TEAMS_CHANNEL_ID="${TEAMS_CHANNEL_ID:-19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2}"
+TEAMS_CLIENT_ID="${TEAMS_CLIENT_ID:-}"
+TEAMS_CLIENT_SECRET="${TEAMS_CLIENT_SECRET:-}"
+
+SERVICENOW_HANDLER_ENABLED="false"
+case "${ENABLE_SERVICENOW_HANDLER,,}" in
+  true|1|yes|y) SERVICENOW_HANDLER_ENABLED="true" ;;
+esac
+
+TEAMS_CONNECTOR_ENABLED="false"
+case "${ENABLE_TEAMS_CONNECTOR,,}" in
+  true|1|yes|y) TEAMS_CONNECTOR_ENABLED="true" ;;
+esac
+
+if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
+  missing_servicenow_vars=()
+  [[ -n "$SERVICENOW_INSTANCE_URL" ]] || missing_servicenow_vars+=(SERVICENOW_INSTANCE_URL)
+  [[ -n "$SERVICENOW_USERNAME" ]] || missing_servicenow_vars+=(SERVICENOW_USERNAME)
+  [[ -n "$SERVICENOW_PASSWORD" ]] || missing_servicenow_vars+=(SERVICENOW_PASSWORD)
+  if (( ${#missing_servicenow_vars[@]} > 0 )); then
+    echo "ServiceNow integration is enabled, but missing: ${missing_servicenow_vars[*]}" >&2
+    echo "Set these in .env or disable with ENABLE_SERVICENOW_HANDLER=false" >&2
+    exit 1
+  fi
+fi
+
+render_sre_config() {
+  local config_file="$1"
+  sed \
+    -e "s|GITHUB_REPO_PLACEHOLDER|${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}|g" \
+    -e "s|TEAMS_TENANT_ID_PLACEHOLDER|${TEAMS_TENANT_ID}|g" \
+    -e "s|TEAMS_GROUP_ID_PLACEHOLDER|${TEAMS_GROUP_ID}|g" \
+    -e "s|TEAMS_CHANNEL_ID_PLACEHOLDER|${TEAMS_CHANNEL_ID}|g" \
+    -e "s|AZURESRE_AGENT_ENDPOINT_PLACEHOLDER|${AGENT_ENDPOINT:-}|g" \
+    "$config_file"
+}
+
+wire_action_group_webhook() {
+  local receiver_name="$1"
+  local receiver_uri="$2"
+  local arm_token
+  local body
+  local http_code
+
+  arm_token=$(az account get-access-token --query accessToken -o tsv)
+  body=$(python3 - "$receiver_name" "$receiver_uri" "${NOTIFICATION_EMAIL:-}" <<'PY'
+import json
+import sys
+
+receiver_name, receiver_uri, notification_email = sys.argv[1:4]
+properties = {
+    "groupShortName": "sre-grubify",
+    "enabled": True,
+    "webhookReceivers": [
+        {
+            "name": receiver_name,
+            "serviceUri": receiver_uri,
+            "useCommonAlertSchema": True,
+        }
+    ],
+}
+if notification_email:
+    properties["emailReceivers"] = [
+        {
+            "name": "SRE Notification",
+            "emailAddress": notification_email,
+            "useCommonAlertSchema": True,
+        }
+    ]
+
+print(json.dumps({"location": "global", "properties": properties}))
+PY
+)
+
+  http_code=$(printf '%s' "$body" | curl -s -o /tmp/sre_ag_put.json -w "%{http_code}" \
+    -X PUT \
+    "https://management.azure.com/subscriptions/${SUBSCRIPTION}/resourceGroups/${SRE_RG}/providers/Microsoft.Insights/actionGroups/${ACTION_GROUP_NAME}?api-version=2023-01-01" \
+    -H "Authorization: Bearer $arm_token" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)
+
+  if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+    echo "  ✓ Webhook receiver '$receiver_name' wired to action group $ACTION_GROUP_NAME"
+  else
+    echo "  ⚠ Could not wire webhook receiver '$receiver_name' (HTTP $http_code)"
+    echo "    Add manually: $receiver_uri"
+    echo "    Response: $(cat /tmp/sre_ag_put.json)"
+  fi
+}
+
+upsert_incident_filter() {
+  local filter_id="$1"
+  local filter_name="$2"
+  local severity="$3"
+  local title_contains="$4"
+  local handling_agent="$5"
+  local http_code
+  local filter_body
+
+  filter_body=$(python3 - "$filter_id" "$filter_name" "$severity" "$title_contains" "$handling_agent" <<'PY'
+import json
+import sys
+
+filter_id, filter_name, severity, title_contains, handling_agent = sys.argv[1:6]
+body = {
+    "isDeleted": False,
+    "isEnabled": True,
+    "documentType": "IncidentFilterAzMonitor",
+    "partitionKey": "IncidentFilterAzMonitor",
+    "targetResourceType": "",
+    "targetResource": "",
+    "id": filter_id,
+    "name": filter_name,
+    "impactedService": "",
+    "priority": "",
+    "priorities": [severity],
+    "incidentType": "",
+    "alertId": "",
+    "titleContains": title_contains,
+    "titleContainsAll": [],
+    "titleContainsAny": [],
+    "titleNotContains": [],
+    "agentMode": "autonomous",
+    "handlingAgent": handling_agent,
+    "owningTeamId": "",
+    "owningTeamIds": [],
+    "maxAutomatedInvestigationAttempts": 3,
+    "deepInvestigationEnabled": False,
+    "mergeEnabled": True,
+    "mergeWindowHours": 3,
+}
+print(json.dumps(body))
+PY
+)
+
+  http_code=$(printf '%s' "$filter_body" | curl -s -o /tmp/sre_incident_filter.json -w "%{http_code}" \
+    -X PUT "${AGENT_ENDPOINT}/api/v1/incidentPlayground/filters/${filter_id}" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)
+
+  if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "202" || "$http_code" == "204" ]]; then
+    echo "  ✓ Incident filter $filter_id"
+  else
+    echo "  ⚠ Incident filter $filter_id — HTTP $http_code: $(cat /tmp/sre_incident_filter.json)"
+  fi
+}
+
+check_knowledge_file_indexed() {
+  local file_name="$1"
+  local files_json
+  files_json=$(curl -sf "${AGENT_ENDPOINT}/api/v1/agentmemory/files" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null || true)
+  if [[ -z "$files_json" ]]; then
+    echo "unknown"
+    return
+  fi
+  python3 -c '
+import json
+import sys
+
+file_name = sys.argv[1]
+payload = json.load(sys.stdin)
+files = payload.get("files", []) if isinstance(payload, dict) else []
+match = next((item for item in files if item.get("name") == file_name), None)
+if not match:
+    print("missing")
+elif match.get("isIndexed") is True:
+    print("indexed")
+else:
+    reason = match.get("errorReason") or "indexing pending"
+    print(f"not-indexed: {reason}")
+' "$file_name" <<<"$files_json" 2>/dev/null || echo "unknown"
+}
+
+verify_teams_connector() {
+  local connector_json
+  local tools_json
+  local connector_names
+  local teams_tools
+
+  connector_json=$(curl -sf "${AGENT_ENDPOINT}/api/v1/extendedAgent/dataconnectors" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null || true)
+  tools_json=$(curl -sf "${AGENT_ENDPOINT}/api/v1/extendedAgent/systemtools" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null || true)
+
+  connector_names=$(python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+for connector in payload:
+    name = connector.get("name", "")
+    connector_type = connector.get("connectorType", "")
+    if "team" in name.lower() or "team" in connector_type.lower():
+        print(f"{name} ({connector_type})")
+' <<<"${connector_json:-[]}" 2>/dev/null || true)
+
+  teams_tools=$(python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+for tool in payload:
+    name = tool.get("name") if isinstance(tool, dict) else str(tool)
+  if "teams" in name.lower() or name in {"GetTeamsMessages", "PostTeamsMessage", "ReplyToTeamsMessage"}:
+        print(name)
+' <<<"${tools_json:-[]}" 2>/dev/null || true)
+
+  if [[ -n "$connector_names" ]]; then
+    echo "  ✓ Teams connector detected: $connector_names"
+  elif [[ "$TEAMS_CONNECTOR_ENABLED" == "true" ]]; then
+    echo "  ⚠ Teams connector is enabled in .env, but no Teams connector is registered"
+    echo "    The current SRE API lists connectors but does not expose a supported connector apply endpoint."
+    echo "    Register/authenticate the Microsoft Teams connector in the SRE Agent portal, then rerun this script to verify."
+    echo "    A healthy portal-created connector exposes tools such as PostTeamsMessage, GetTeamsMessages, and ReplyToTeamsMessage."
+    if [[ -n "$TEAMS_CLIENT_ID" && -n "$TEAMS_CLIENT_SECRET" ]]; then
+      echo "    Teams client credentials were provided locally, but automatic connector auth is not supported by the discovered API."
+    fi
+  else
+    echo "  ℹ Teams connector disabled — skipping connector registration"
+  fi
+
+  if [[ -n "$teams_tools" ]]; then
+    echo "  ✓ Teams system tools available: $(echo "$teams_tools" | paste -sd ', ' -)"
+  elif [[ "$TEAMS_CONNECTOR_ENABLED" == "true" ]]; then
+    echo "  ⚠ Teams system tools are not available yet"
+  else
+    echo "  ℹ Teams system tools not required while ENABLE_TEAMS_CONNECTOR=false"
+  fi
+}
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Grubify SRE Agent Deployment"
 echo "  Subscription : $SUBSCRIPTION"
 echo "  Location     : $LOCATION"
+echo "  Token        : $RESOURCE_TOKEN"
 echo "  Agent RG     : $SRE_RG"
 echo "  App RG       : $APP_RG"
+echo "  ServiceNow   : $SERVICENOW_HANDLER_ENABLED"
+echo "  Teams        : $TEAMS_CONNECTOR_ENABLED"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 az account set --subscription "$SUBSCRIPTION"
 
-# ── 1. Resource group ─────────────────────────────────────────────────────────
+# -- 1. Resource group ---------------------------------------------------------
 echo ""
-echo "▶ Step 1/7 — Resource group"
+echo "▶ Step 1/12 — Resource group"
 az group create --name "$SRE_RG" --location "$LOCATION" --output none
 echo "  ✓ $SRE_RG"
 
-# ── 2. Log Analytics + Application Insights ───────────────────────────────────
+# -- 2. Log Analytics + Application Insights ----------------------------------
 echo ""
-echo "▶ Step 2/7 — Log Analytics + Application Insights"
+echo "▶ Step 2/12 — Log Analytics + Application Insights"
 LAW_ID=$(az monitor log-analytics workspace create \
   --resource-group "$SRE_RG" \
   --workspace-name "$LAW_NAME" \
@@ -68,12 +331,15 @@ APPI_ID=$(az monitor app-insights component create \
 APPI_APP_ID=$(az monitor app-insights component show \
   --resource-group "$SRE_RG" --app "$APPI_NAME" \
   --query appId -o tsv)
+APPI_CONNECTION_STRING=$(az monitor app-insights component show \
+  --resource-group "$SRE_RG" --app "$APPI_NAME" \
+  --query connectionString -o tsv)
 echo "  ✓ $LAW_NAME"
 echo "  ✓ $APPI_NAME (appId: $APPI_APP_ID)"
 
-# ── 3. User-assigned managed identity ────────────────────────────────────────
+# -- 3. User-assigned managed identity ----------------------------------------
 echo ""
-echo "▶ Step 3/7 — User-assigned managed identity"
+echo "▶ Step 3/12 — User-assigned managed identity"
 IDENTITY_ID=$(az identity create \
   --resource-group "$SRE_RG" \
   --name "$IDENTITY_NAME" \
@@ -84,7 +350,6 @@ IDENTITY_PRINCIPAL=$(az identity show \
   --name "$IDENTITY_NAME" \
   --query principalId -o tsv)
 
-# Grant Monitoring Reader + Contributor on App RG so the agent can query metrics / act
 APP_RG_ID=$(az group show --name "$APP_RG" --query id -o tsv)
 az role assignment create \
   --assignee-object-id "$IDENTITY_PRINCIPAL" \
@@ -98,7 +363,6 @@ az role assignment create \
   --role "Contributor" \
   --scope "$APP_RG_ID" \
   --output none 2>/dev/null || true
-# Also grant on own SRE RG
 SRE_RG_ID=$(az group show --name "$SRE_RG" --query id -o tsv)
 az role assignment create \
   --assignee-object-id "$IDENTITY_PRINCIPAL" \
@@ -109,53 +373,65 @@ az role assignment create \
 echo "  ✓ $IDENTITY_NAME"
 echo "  ✓ Monitoring Reader + Contributor on $APP_RG"
 
-# ── 4. SRE Agent ──────────────────────────────────────────────────────────────
+# -- 4. SRE Agent --------------------------------------------------------------
 echo ""
-echo "▶ Step 4/7 — SRE Agent"
-az resource create \
+echo "▶ Step 4/12 — SRE Agent"
+EXISTING_AGENT_ID=$(az resource show \
   --resource-group "$SRE_RG" \
   --resource-type "Microsoft.App/agents" \
   --name "$AGENT_NAME" \
-  --location "$LOCATION" \
-  --is-full-object \
-  --properties "{
-    \"location\": \"${LOCATION}\",
-    \"identity\": {
-      \"type\": \"SystemAssigned, UserAssigned\",
-      \"userAssignedIdentities\": {
-        \"${IDENTITY_ID}\": {}
-      }
-    },
-    \"properties\": {
-      \"actionConfiguration\": {
-        \"accessLevel\": \"High\",
-        \"mode\": \"autonomous\",
-        \"identity\": \"${IDENTITY_ID}\"
-      },
-      \"incidentManagementConfiguration\": {
-        \"type\": \"AzMonitor\",
-        \"connectionName\": \"azmonitor\"
-      },
-      \"knowledgeGraphConfiguration\": {
-        \"identity\": \"${IDENTITY_ID}\",
-        \"managedResources\": [
-          \"${APP_RG_ID}\"
-        ]
-      },
-      \"logConfiguration\": {
-        \"applicationInsightsConfiguration\": {
-          \"appId\": \"${APPI_APP_ID}\",
-          \"applicationInsightsResourceId\": \"${APPI_ID}\"
+  --api-version "2025-05-01-preview" \
+  --query id -o tsv 2>/dev/null || true)
+
+if [[ -n "$EXISTING_AGENT_ID" ]]; then
+  echo "  ✓ $AGENT_NAME already exists — reusing it"
+else
+  az resource create \
+    --resource-group "$SRE_RG" \
+    --resource-type "Microsoft.App/agents" \
+    --name "$AGENT_NAME" \
+    --location "$LOCATION" \
+    --is-full-object \
+    --properties "{
+      \"location\": \"${LOCATION}\",
+      \"identity\": {
+        \"type\": \"SystemAssigned, UserAssigned\",
+        \"userAssignedIdentities\": {
+          \"${IDENTITY_ID}\": {}
         }
       },
-      \"upgradeChannel\": \"Preview\",
-      \"monthlyAgentUnitLimit\": 10000,
-      \"experimentalSettings\": {
-        \"EnableWorkspaceTools\": true
+      \"properties\": {
+        \"actionConfiguration\": {
+          \"accessLevel\": \"High\",
+          \"mode\": \"autonomous\",
+          \"identity\": \"${IDENTITY_ID}\"
+        },
+        \"incidentManagementConfiguration\": {
+          \"type\": \"AzMonitor\",
+          \"connectionName\": \"azmonitor\"
+        },
+        \"knowledgeGraphConfiguration\": {
+          \"identity\": \"${IDENTITY_ID}\",
+          \"managedResources\": [
+            \"${APP_RG_ID}\"
+          ]
+        },
+        \"logConfiguration\": {
+          \"applicationInsightsConfiguration\": {
+            \"appId\": \"${APPI_APP_ID}\",
+            \"applicationInsightsResourceId\": \"${APPI_ID}\",
+            \"connectionString\": \"${APPI_CONNECTION_STRING}\"
+          }
+        },
+        \"upgradeChannel\": \"Preview\",
+        \"monthlyAgentUnitLimit\": 10000,
+        \"experimentalSettings\": {
+          \"EnableWorkspaceTools\": true
+        }
       }
-    }
-  }" \
-  --output none
+    }" \
+    --output none
+fi
 
 AGENT_ENDPOINT=$(az resource show \
   --resource-group "$SRE_RG" \
@@ -166,20 +442,40 @@ AGENT_ENDPOINT=$(az resource show \
 echo "  ✓ $AGENT_NAME"
 echo "  ✓ Endpoint: $AGENT_ENDPOINT"
 
-# ── 4b. Connect GitHub repository ────────────────────────────────────────────
+# -- 4b. Connect GitHub repository --------------------------------------------
 echo ""
-echo "▶ Step 4b — GitHub repository connection"
+echo "▶ Step 4b/12 — GitHub repository connection"
 AGENT_RESOURCE_ID="/subscriptions/${SUBSCRIPTION}/resourceGroups/${SRE_RG}/providers/Microsoft.App/agents/${AGENT_NAME}"
 ARM_TOKEN=$(az account get-access-token --query accessToken -o tsv)
-# Wait up to 5 min for agent to accept updates (may be BuildingKnowledgeGraph)
+GITHUB_PATCH_BODY=$(python3 - "$GITHUB_REPO_OWNER" "$GITHUB_REPO_NAME" "$GITHUB_ACCESS_TOKEN" <<'PY'
+import json
+import sys
+
+owner, name, access_token = sys.argv[1:4]
+git_hub_configuration = {
+    "repositories": [
+        {"owner": owner, "name": name}
+    ]
+}
+if access_token:
+    git_hub_configuration["patTokenOverride"] = access_token
+
+print(json.dumps({"properties": {"gitHubConfiguration": git_hub_configuration}}))
+PY
+)
 for _i in $(seq 1 10); do
-  HTTP_CODE=$(curl -s -o /tmp/sre-github-patch.json -w "%{http_code}" -X PATCH \
-    "https://management.azure.com${AGENT_RESOURCE_ID}?api-version=2025-05-01-preview" \
+  HTTP_CODE=$(printf '%s' "$GITHUB_PATCH_BODY" | curl -s -o /tmp/sre-github-patch.json -w "%{http_code}" -X PATCH \
+    "https://management.azure.com${AGENT_RESOURCE_ID}?api-version=2026-01-01" \
     -H "Authorization: Bearer $ARM_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"properties\":{\"gitHubConfiguration\":{\"repositories\":[{\"owner\":\"${GITHUB_REPO_OWNER}\",\"name\":\"${GITHUB_REPO_NAME}\"}]}}}")
+    --data-binary @-)
   if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" || "$HTTP_CODE" == "202" ]]; then
     echo "  ✓ GitHub repo ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME} connected (HTTP $HTTP_CODE)"
+    if [[ -n "$GITHUB_ACCESS_TOKEN" ]]; then
+      echo "  ✓ GitHub Code Access token override submitted"
+    else
+      echo "  ℹ GITHUB_PAT/GITHUB_TOKEN not set — repository configured without token override"
+    fi
     break
   elif [[ "$HTTP_CODE" == "409" ]]; then
     echo "  … agent busy (HTTP 409), retrying in 30s…"
@@ -191,9 +487,9 @@ for _i in $(seq 1 10); do
   fi
 done
 
-# ── 5. Action group ───────────────────────────────────────────────────────────
+# -- 5. Action group -----------------------------------------------------------
 echo ""
-echo "▶ Step 5/7 — Action group"
+echo "▶ Step 5/12 — Action group"
 AG_ARGS=(
   --resource-group "$SRE_RG"
   --name "$ACTION_GROUP_NAME"
@@ -210,10 +506,9 @@ AG_ID=$(az monitor action-group show \
   --query id -o tsv)
 echo "  ✓ $ACTION_GROUP_NAME"
 
-# ── 6. HTTP 5xx alert on Grubify API ─────────────────────────────────────────
+# -- 6. HTTP 5xx alert on Grubify API -----------------------------------------
 echo ""
-echo "▶ Step 6/7 — HTTP 5xx alert"
-# Get the Container App resource ID for the API
+echo "▶ Step 6/12 — HTTP 5xx alert"
 CA_API_ID=$(az containerapp show -g "$APP_RG" -n "ca-${SUFFIX}-api" --query id -o tsv 2>/dev/null || \
            az containerapp list -g "$APP_RG" -o json | python3 -c "import json,sys; apps=json.load(sys.stdin); print([a['id'] for a in apps if 'api' in a['name']][0])")
 if [[ -z "$CA_API_ID" ]]; then
@@ -234,9 +529,9 @@ else
   echo "  ✓ $ALERT_NAME"
 fi
 
-# ── 7. RBAC — grant deploying user access to the SRE Agent portal ───────────
+# -- 7. RBAC: grant deploying user access to the SRE Agent portal -------------
 echo ""
-echo "▶ Step 7/7 — SRE Agent portal access (RBAC)"
+echo "▶ Step 7/12 — SRE Agent portal access (RBAC)"
 DEPLOYER_OID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)
 AGENT_RESOURCE_ID=$(az resource show -g "$SRE_RG" \
   --resource-type "Microsoft.App/agents" -n "$AGENT_NAME" \
@@ -254,12 +549,11 @@ else
   echo "    Scope: $AGENT_RESOURCE_ID"
 fi
 
-# ── 8. Knowledge documents ────────────────────────────────────────────────────
+# -- 8. Knowledge documents ----------------------------------------------------
 echo ""
-echo "▶ Step 8/11 — Knowledge documents"
+echo "▶ Step 8/12 — Knowledge documents"
 KNOWLEDGE_DIR="${SCRIPT_DIR}/../knowledge"
 if [[ -d "$KNOWLEDGE_DIR" ]]; then
-  # Wait for agent to be reachable (up to 5 min)
   AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
   UPLOAD_ENDPOINT="${AGENT_ENDPOINT}/api/v1/agentmemory/upload"
   UPLOAD_OK=0
@@ -273,18 +567,49 @@ if [[ -d "$KNOWLEDGE_DIR" ]]; then
     AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
   done
   if [[ "$UPLOAD_OK" == "1" ]]; then
+    uploaded_knowledge_files=()
     for f in "${KNOWLEDGE_DIR}"/*.md; do
       fname=$(basename "$f")
       HTTP_CODE=$(curl -s -o /tmp/sre_upload.json -w "%{http_code}" -X POST \
         "$UPLOAD_ENDPOINT" \
         -H "Authorization: Bearer $AZURESRE_TOKEN" \
-        -F "files=@${f};type=text/plain")
+        -F "files=@${f};type=text/markdown")
       if [[ "$HTTP_CODE" == "200" ]]; then
         echo "  ✓ $fname"
+        uploaded_knowledge_files+=("$fname")
       else
         echo "  ⚠ $fname — HTTP $HTTP_CODE: $(cat /tmp/sre_upload.json)"
       fi
     done
+
+    if (( ${#uploaded_knowledge_files[@]} > 0 )); then
+      echo "  … verifying knowledge indexing"
+      for _i in $(seq 1 12); do
+        pending_files=()
+        failed_files=()
+        for fname in "${uploaded_knowledge_files[@]}"; do
+          index_state=$(check_knowledge_file_indexed "$fname")
+          if [[ "$index_state" == "indexed" ]]; then
+            continue
+          elif [[ "$index_state" == not-indexed:* ]]; then
+            failed_files+=("$fname ($index_state)")
+          else
+            pending_files+=("$fname ($index_state)")
+          fi
+        done
+        if (( ${#pending_files[@]} == 0 && ${#failed_files[@]} == 0 )); then
+          echo "  ✓ All uploaded knowledge files are indexed"
+          break
+        fi
+        if (( _i == 12 )); then
+          for item in "${pending_files[@]}"; do echo "  ⚠ Knowledge not indexed: $item"; done
+          for item in "${failed_files[@]}"; do echo "  ⚠ Knowledge indexing failed: $item"; done
+        else
+          sleep 10
+          AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
+        fi
+      done
+    fi
   else
     echo "  ⚠ Agent API not reachable after 5 min — upload docs manually via https://sre.azure.com"
   fi
@@ -292,19 +617,27 @@ else
   echo "  ⚠ No knowledge/ directory found — skipping"
 fi
 
-# ── 9. Custom sub-agents (Extended Agents) ───────────────────────────────────
+# -- 8b. Teams connector and tools --------------------------------------------
 echo ""
-echo "▶ Step 9/11 — Custom sub-agents (Agent Canvas)"
+echo "▶ Step 8b/12 — Teams connector and tools"
+AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
+verify_teams_connector
+
+# -- 9. Custom sub-agents (Extended Agents) -----------------------------------
+echo ""
+echo "▶ Step 9/12 — Custom sub-agents (Agent Canvas)"
 AGENTS_DIR="${SCRIPT_DIR}/../sre-config/agents"
-GITHUB_REPO="gderossilive/GrubifyDemo"
+AGENTS_TO_DEPLOY=("code-analyzer" "issue-triager" "incident-handler-core")
 if [[ -d "$AGENTS_DIR" ]]; then
-  # Refresh token (may have expired during knowledge upload)
   AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
   APPLY_ENDPOINT="${AGENT_ENDPOINT}/api/v1/extendedAgent/apply"
-  for yaml_file in "${AGENTS_DIR}"/*.yaml; do
-    agent_name=$(basename "$yaml_file" .yaml)
-    # Substitute placeholder with actual GitHub repo
-    yaml_body=$(sed "s|GITHUB_REPO_PLACEHOLDER|${GITHUB_REPO}|g" "$yaml_file")
+  for agent_name in "${AGENTS_TO_DEPLOY[@]}"; do
+    yaml_file="${AGENTS_DIR}/${agent_name}.yaml"
+    if [[ ! -f "$yaml_file" ]]; then
+      echo "  ⚠ Missing $yaml_file — skipping"
+      continue
+    fi
+    yaml_body=$(render_sre_config "$yaml_file")
     HTTP_CODE=$(echo "$yaml_body" | curl -s -o /tmp/sre_agent_apply.json -w "%{http_code}" \
       -X PUT "$APPLY_ENDPOINT" \
       -H "Authorization: Bearer $AZURESRE_TOKEN" \
@@ -316,26 +649,27 @@ if [[ -d "$AGENTS_DIR" ]]; then
       echo "  ⚠ $agent_name — HTTP $HTTP_CODE: $(cat /tmp/sre_agent_apply.json)"
     fi
   done
+  if [[ -f "${AGENTS_DIR}/incident-handler-full.yaml" ]]; then
+    echo "  ℹ incident-handler-full.yaml skipped — normal deployment uses incident-handler-core.yaml"
+  fi
 else
   echo "  ⚠ No sre-config/agents/ directory found — skipping"
 fi
 
-# ── 10. Response plans (HTTP triggers for Azure Monitor alerts) ───────────────
+# -- 10. Response plans (HTTP triggers for Azure Monitor alerts) ---------------
 echo ""
-echo "▶ Step 10/11 — Alert response plans"
+echo "▶ Step 10/12 — Alert response plans"
 RP_DIR="${SCRIPT_DIR}/../sre-config/response-plans"
+SRE_TRIGGER_URL=""
 if [[ -d "$RP_DIR" ]]; then
   AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
   for rp_file in "${RP_DIR}"/*.yaml; do
     rp_name=$(basename "$rp_file" .yaml)
-
-    # Parse YAML with python3 → JSON body for the trigger API
-    TRIGGER_BODY=$(python3 - "$rp_file" << 'PYEOF'
+    TRIGGER_BODY=$(python3 - "$rp_file" <<'PYEOF'
 import sys, json
 try:
     import yaml
 except ImportError:
-    # Fallback manual parse for simple YAML
     import re
     with open(sys.argv[1]) as f:
         raw = f.read()
@@ -343,13 +677,17 @@ except ImportError:
         m = re.search(r'^' + key + r'\s*:\s*(.+)', raw, re.MULTILINE)
         return m.group(1).strip().strip('"\'') if m else ""
     def extract_block(key):
-        m = re.search(r'^' + key + r'\s*:\s*\|\n((?:  .+\n?)+)', raw, re.MULTILINE)
+        m = re.search(r'^' + key + r'\s*:\s*([>|])\n((?:  .+\n?)+)', raw, re.MULTILINE)
         if m:
-            return re.sub(r'^  ', '', m.group(1), flags=re.MULTILINE).strip()
+            style, value = m.groups()
+            value = re.sub(r'^  ', '', value, flags=re.MULTILINE).strip()
+            if style == '>':
+                return ' '.join(line.strip() for line in value.splitlines() if line.strip())
+            return value
         return extract(key)
     print(json.dumps({
         "name": extract("name"),
-        "description": extract("description"),
+        "description": extract_block("description"),
         "agentPrompt": extract_block("agentPrompt"),
         "agent": extract("agent"),
         "agentMode": extract("agentMode") or "autonomous",
@@ -367,11 +705,6 @@ print(json.dumps({
 PYEOF
 )
 
-    # Check if a trigger with this name already exists
-    EXISTING_ID=$(curl -sf "${AGENT_ENDPOINT}/api/v1/httptriggers" \
-      -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null | \
-      python3 -c "import json,sys; lst=json.load(sys.stdin); n=next((t['id'] for t in lst if t.get('name')==json.loads('${TRIGGER_BODY}'.replace(\"'\", '\"') if False else '{}').get('name','__none__')), None); print(n or '')" 2>/dev/null || echo "")
-    # Simpler duplicate check using the name field directly
     RP_TRIGGER_NAME=$(echo "$TRIGGER_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['name'])")
     EXISTING_ID=$(curl -sf "${AGENT_ENDPOINT}/api/v1/httptriggers" \
       -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null | \
@@ -398,46 +731,68 @@ PYEOF
       fi
     fi
 
-    # Wire trigger URL → action group as a webhook receiver
     if [[ -n "${TRIGGER_URL:-}" ]]; then
-      # Save URL for reference (.azure/ is gitignored)
       mkdir -p "${SCRIPT_DIR}/../.azure"
       echo "$TRIGGER_URL" > "${SCRIPT_DIR}/../.azure/sre-trigger-url"
-
-      # Add webhook receiver via ARM REST API (action groups use 'global' location)
-      ARM_TOKEN_RP=$(az account get-access-token --query accessToken -o tsv)
-      AG_PUT_CODE=$(curl -s -o /tmp/sre_ag_put.json -w "%{http_code}" \
-        -X PUT \
-        "https://management.azure.com/subscriptions/${SUBSCRIPTION}/resourceGroups/${SRE_RG}/providers/Microsoft.Insights/actionGroups/${ACTION_GROUP_NAME}?api-version=2023-01-01" \
-        -H "Authorization: Bearer $ARM_TOKEN_RP" \
-        -H "Content-Type: application/json" \
-        -d "{
-          \"location\": \"global\",
-          \"properties\": {
-            \"groupShortName\": \"sre-grubify\",
-            \"enabled\": true,
-            \"webhookReceivers\": [
-              {
-                \"name\": \"sre-incident-handler\",
-                \"serviceUri\": \"${TRIGGER_URL}\",
-                \"useCommonAlertSchema\": true
-              }
-            ]
-          }
-        }")
-      if [[ "$AG_PUT_CODE" == "200" || "$AG_PUT_CODE" == "201" ]]; then
-        echo "  ✓ Webhook wired to action group $ACTION_GROUP_NAME"
-      else
-        echo "  ⚠ Could not auto-wire webhook (HTTP $AG_PUT_CODE) — add manually:"
-        echo "    $TRIGGER_URL"
-      fi
+      SRE_TRIGGER_URL="$TRIGGER_URL"
+      echo "  ✓ SRE trigger URL saved for action group wiring"
     fi
   done
 else
   echo "  ⚠ No sre-config/response-plans/ directory found — skipping"
 fi
 
-# ── 11. Summary ────────────────────────────────────────────────────────────────
+# -- 10b. Incident response plan filters --------------------------------------
+echo ""
+echo "▶ Step 10b/12 — Incident response plan filters"
+AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
+upsert_incident_filter "Grubify-Alert" "" "Sev2" "$ALERT_NAME" ""
+upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors" "Sev3" "Grubify HTTP 5xx Errors" "incident-handler"
+
+# -- 11. Optional ServiceNow Azure Resource Handler ---------------------------
+echo ""
+echo "▶ Step 11/12 — ServiceNow Azure Resource Handler"
+if [[ -z "${SRE_TRIGGER_URL:-}" && -f "${SCRIPT_DIR}/../.azure/sre-trigger-url" ]]; then
+  SRE_TRIGGER_URL=$(<"${SCRIPT_DIR}/../.azure/sre-trigger-url")
+fi
+
+if [[ -z "${SRE_TRIGGER_URL:-}" ]]; then
+  echo "  ⚠ SRE trigger URL unavailable — action group webhook was not changed"
+elif [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
+  SERVICENOW_TEMPLATE="${SCRIPT_DIR}/../infra/servicenow-logic-app.bicep"
+  if [[ ! -f "$SERVICENOW_TEMPLATE" ]]; then
+    echo "  ⚠ Missing $SERVICENOW_TEMPLATE — falling back to direct SRE webhook"
+    wire_action_group_webhook "sre-incident-handler" "$SRE_TRIGGER_URL"
+  else
+    deployment_name="servicenow-handler-$(date -u +%Y%m%d%H%M%S)"
+    deploy_output=$(az deployment group create \
+      --name "$deployment_name" \
+      --resource-group "$SRE_RG" \
+      --template-file "$SERVICENOW_TEMPLATE" \
+      --parameters \
+          location="$LOCATION" \
+          logicAppName="$SERVICENOW_LOGIC_APP_NAME" \
+          serviceNowInstanceUrl="$SERVICENOW_INSTANCE_URL" \
+          serviceNowUsername="$SERVICENOW_USERNAME" \
+          serviceNowPassword="$SERVICENOW_PASSWORD" \
+          serviceNowAssignmentGroup="$SERVICENOW_ASSIGNMENT_GROUP" \
+          serviceNowCategory="$SERVICENOW_CATEGORY" \
+          sreTriggerUrl="$SRE_TRIGGER_URL" \
+      --query properties.outputs \
+      --output json)
+
+    SERVICENOW_CALLBACK_URL=$(echo "$deploy_output" | python3 -c "import json,sys; print(json.load(sys.stdin)['callbackUrl']['value'])")
+    mkdir -p "${SCRIPT_DIR}/../.azure"
+    echo "$SERVICENOW_CALLBACK_URL" > "${SCRIPT_DIR}/../.azure/servicenow-handler-url"
+    echo "  ✓ $SERVICENOW_LOGIC_APP_NAME deployed"
+    wire_action_group_webhook "servicenow-azure-resource-handler" "$SERVICENOW_CALLBACK_URL"
+  fi
+else
+  echo "  ℹ ServiceNow integration disabled — using direct SRE Agent webhook"
+  wire_action_group_webhook "sre-incident-handler" "$SRE_TRIGGER_URL"
+fi
+
+# -- 12. Summary ---------------------------------------------------------------
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  ✅ SRE Agent deployed successfully!"
@@ -445,10 +800,13 @@ echo ""
 echo "  Agent name     : $AGENT_NAME"
 echo "  Resource group : $SRE_RG"
 echo "  Endpoint       : ${AGENT_ENDPOINT:-<provisioning>}"
+echo "  ServiceNow     : $SERVICENOW_HANDLER_ENABLED"
+echo "  Teams          : $TEAMS_CONNECTOR_ENABLED"
 echo "  Portal         : https://sre.azure.com"
 echo ""
 echo "  Next steps:"
 echo "  1. Open https://sre.azure.com and verify the agent is running"
-echo "  2. Authorize the GitHub repo (gderossilive/GrubifyDemo) via the Code card in the portal"
-echo "  3. Run ./scripts/break-app.sh to trigger an incident demo"
+echo "  2. Authorize the GitHub repo (${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}) via the Code card in the portal"
+echo "  3. If Teams is enabled, verify/register the Teams connector in the portal"
+echo "  4. Run ./scripts/break-app.sh to trigger an incident demo"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -10,14 +10,28 @@ spec:
     Always search memory for similar past incidents first.
     Use ExecutePythonCode to plot metrics charts when presenting evidence.
 
+    Some incidents are routed through the Grubify ServiceNow Azure Resource
+    Handler before reaching you. When the trigger payload includes a
+    serviceNow object, treat it as the system-of-record incident and include
+    serviceNow.number, serviceNow.sysId, and serviceNow.url in all summaries.
+    Use AcknowledgeServiceNowIncident at the start when the incident number is
+    present. After diagnosis, use PostServiceNowDiscussionEntry to add the root
+    cause, key evidence, and remediation actions. If remediation succeeds and
+    impact has cleared, use ResolveServiceNowIncident with a concise closure
+    note. If any ServiceNow tool is unavailable, continue the investigation and
+    include the ServiceNow link in your final report.
+
     After completing your investigation, post a concise summary of your
     findings and evidence to the GrubifyOps Microsoft Teams channel using
-    the teams-mcp tool (Microsoft Graph API — sendChatMessage or
-    createChatMessage). Use the following channel details:
-      Team (Group) ID : 231764ec-b797-41aa-988e-5a9a4c3bd49d
-      Channel ID      : 19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2
+    PostTeamsMessage when the Microsoft Teams connector is available. Use
+    GetTeamsMessages or ReplyToTeamsMessage only when you need to inspect or
+    reply to an existing incident thread. Use the following channel details:
+      Team (Group) ID : TEAMS_GROUP_ID_PLACEHOLDER
+      Channel ID      : TEAMS_CHANNEL_ID_PLACEHOLDER
     The Teams message should include: incident summary, root cause,
-    key evidence (log excerpts, metric values), and remediation taken.
+    key evidence (log excerpts, metric values), and remediation taken. If the
+    Teams connector or tool is unavailable, continue the investigation and note
+    that Teams notification was skipped in the final report.
   handoff_description: Investigates incidents using runbooks, provides findings, and posts to Teams
   agent_type: Autonomous
   tools:
@@ -28,5 +42,12 @@ spec:
     - QueryLogAnalyticsByWorkspaceId
     - QueryAppInsightsByResourceId
     - ExecutePythonCode
+    - AcknowledgeServiceNowIncident
+    - GetServiceNowIncident
+    - PostServiceNowDiscussionEntry
+    - ResolveServiceNowIncident
+    - GetTeamsMessages
+    - PostTeamsMessage
+    - ReplyToTeamsMessage
   mcp_tools:
     - teams-mcp/*

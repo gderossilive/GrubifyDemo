@@ -9,8 +9,13 @@
 #     POST /api/v1/httptriggers/create and patches the action group webhook.
 #   - The resulting triggerUrl is stored in .azure/sre-trigger-url for reference.
 #
+# Default path:
 # Azure Monitor Alert -> Action Group (webhook) -> SRE Agent HTTP Trigger
 #                                                -> incident-handler sub-agent
+#
+# Optional ServiceNow path:
+# Azure Monitor Alert -> Action Group (webhook) -> Logic App ServiceNow handler
+#   -> ServiceNow incident -> SRE Agent HTTP Trigger -> incident-handler
 
 name: grubify-http-5xx-response-plan
 description: >
@@ -32,6 +37,15 @@ agentPrompt: |
   An Azure Monitor alert has fired for the Grubify application.
   The alert payload in the incoming request contains the affected resource,
   metric thresholds breached, and timestamps.
+
+   If the payload contains source = "servicenow-azure-resource-handler" and a
+   serviceNow object, then this incident was first opened in ServiceNow by the
+   Grubify ServiceNow Azure Resource Handler. Treat serviceNow.number,
+   serviceNow.sysId, and serviceNow.url as the ServiceNow incident record for
+   this investigation. Acknowledge it, add diagnosis/remediation notes, and
+   resolve it after successful remediation when the ServiceNow tools are
+   available. If those tools are not available, include the ServiceNow URL and
+   incident number in the final report.
 
   Follow these steps:
   1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.

@@ -9,7 +9,10 @@
       "value": "${AZURE_LOCATION}"
     },
     "resourceGroupName": {
-      "value": "rg-grubify-app"
+      "value": "rg-grubify-app-${GRUBIFY_RESOURCE_TOKEN}"
+    },
+    "resourceToken": {
+      "value": "${GRUBIFY_RESOURCE_TOKEN}"
     },
     "apiImage": {
       "value": "${SERVICE_API_IMAGE_NAME}"
