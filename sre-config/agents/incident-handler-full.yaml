@@ -16,7 +16,17 @@ spec:
     IMPORTANT: Fill out EVERY section completely — do not leave any section
     empty or skip the References section. Include full ARM resource IDs,
     workspace IDs, and App Insights resource IDs in References.
-  handoff_description: Investigates incidents using runbooks and creates GitHub issues with findings
+
+    After creating the GitHub issue, also post a concise summary of your
+    findings and evidence to the GrubifyOps Microsoft Teams channel using
+    the teams-mcp tool (Microsoft Graph API — sendChatMessage or
+    createChatMessage). Use the following channel details:
+      Team (Group) ID : 231764ec-b797-41aa-988e-5a9a4c3bd49d
+      Channel ID      : 19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2
+    The Teams message should include: incident summary, root cause,
+    key evidence (log excerpts, metric values), link to the GitHub issue
+    created, and remediation taken.
+  handoff_description: Investigates incidents using runbooks, creates GitHub issues, and posts to Teams
   agent_type: Autonomous
   tools:
     - SearchMemory
@@ -28,3 +38,4 @@ spec:
     - ExecutePythonCode
   mcp_tools:
     - github-mcp/*
+    - teams-mcp/*

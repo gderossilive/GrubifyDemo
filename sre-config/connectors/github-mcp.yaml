@@ -1,5 +1,17 @@
 # GitHub MCP Connector
-# The PLACEHOLDER_GITHUB_PAT token is replaced by the post-provision script
+# OAuth 2.0 authorization_code flow.
+# Register a GitHub OAuth App at https://github.com/settings/developers
+# and set the Authorization callback URL to:
+#   https://sre-agent-grubify--31f8fc4f.62f83535.swedencentral.azuresre.ai/oauth/callback
+#
+# After applying this connector, run the manual auth step:
+#   AGENT=https://sre-agent-grubify--31f8fc4f.62f83535.swedencentral.azuresre.ai
+#   TOKEN=$(az account get-access-token --query accessToken -o tsv)
+#   curl -X PATCH "$AGENT/api/v1/connectors/github-mcp/auth" \
+#     -H "Authorization: Bearer $TOKEN" \
+#     -H "Content-Type: application/json" \
+#     -d '{"client_id":"<your-client-id>","client_secret":"<your-client-secret>"}'
+# Then open the authorization URL in a browser to complete the OAuth consent.
 api_version: azuresre.ai/v1
 kind: DataConnector
 spec:
@@ -7,5 +19,11 @@ spec:
   type: Mcp
   endpoint: https://api.githubcopilot.com/mcp/
   auth:
-    type: BearerToken
-    token: PLACEHOLDER_GITHUB_PAT
+    type: OAuth
+    grant_type: authorization_code
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    redirect_uri: https://sre-agent-grubify--31f8fc4f.62f83535.swedencentral.azuresre.ai/oauth/callback
+    scopes:
+      - repo
+    credentials: pending_manual_setup

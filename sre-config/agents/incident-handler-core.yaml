@@ -9,7 +9,16 @@ spec:
 
     Always search memory for similar past incidents first.
     Use ExecutePythonCode to plot metrics charts when presenting evidence.
-  handoff_description: Investigates incidents using runbooks and provides findings
+
+    After completing your investigation, post a concise summary of your
+    findings and evidence to the GrubifyOps Microsoft Teams channel using
+    the teams-mcp tool (Microsoft Graph API — sendChatMessage or
+    createChatMessage). Use the following channel details:
+      Team (Group) ID : 231764ec-b797-41aa-988e-5a9a4c3bd49d
+      Channel ID      : 19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2
+    The Teams message should include: incident summary, root cause,
+    key evidence (log excerpts, metric values), and remediation taken.
+  handoff_description: Investigates incidents using runbooks, provides findings, and posts to Teams
   agent_type: Autonomous
   tools:
     - SearchMemory
@@ -19,3 +28,5 @@ spec:
     - QueryLogAnalyticsByWorkspaceId
     - QueryAppInsightsByResourceId
     - ExecutePythonCode
+  mcp_tools:
+    - teams-mcp/*
