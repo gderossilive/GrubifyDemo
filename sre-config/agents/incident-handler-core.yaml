@@ -47,7 +47,7 @@ spec:
       Team (Group) ID : TEAMS_GROUP_ID_PLACEHOLDER
       Channel ID      : TEAMS_CHANNEL_ID_PLACEHOLDER
     The Teams message should include: incident summary, root cause,
-    key evidence (log excerpts, metric values), and remediation taken. If the
+    key evidence (log excerpts, metric values), chain of events, and remediation taken. If the
     Teams connector or tool is unavailable, continue the investigation and note
     that Teams notification was skipped in the final report.
   handoff_description: Investigates incidents using runtime evidence, updates ServiceNow, and posts to Teams without source-code access
