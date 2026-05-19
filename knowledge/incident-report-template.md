@@ -56,6 +56,8 @@ Use this exact markdown structure for the issue body:
 
 ### Metrics snapshot (Azure Monitor)
 
+<Use Azure Monitor metrics as evidence. The ServiceNow incident remains the system-of-record ticket.>
+
 - **Requests** (5m bins): <values at key timestamps>
 - **ResponseTime avg:** <peak value>
 - **RestartCount:** <value>

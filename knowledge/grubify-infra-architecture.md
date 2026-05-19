@@ -15,7 +15,7 @@ This lab does not deploy a generic Node.js container. It deploys the vendored Gr
 - Backend: ASP.NET Core Web API (`GrubifyApi`)
 - Frontend: React frontend (`grubify-frontend`)
 - Hosting: Azure Container Apps
-- Agent platform: Azure SRE Agent with Azure Monitor incidents enabled
+- Agent platform: Azure SRE Agent with ServiceNow-backed incident routing
 
 ---
 
@@ -200,11 +200,9 @@ This is the permission set the agent uses to inspect resources, query telemetry,
 
 ### Incident Platform Wiring
 
-`scripts/post-provision.sh` enables Azure Monitor as the incident platform by patching the agent resource with:
+Azure Monitor remains the HTTP 5xx metric signal source, but ServiceNow is the incident system of record. The deployment creates an Azure Monitor metric alert and action group, then routes the action group webhook through the ServiceNow Logic App before the SRE Agent trigger.
 
-- `incidentManagementConfiguration.type = AzMonitor`
-
-It then creates a response plan filter:
+The deployment creates a response plan filter:
 
 - Filter ID: `grubify-http-errors`
 - Handling agent: `incident-handler`
@@ -214,8 +212,9 @@ So the runtime flow is:
 
 1. Backend Container App emits HTTP 5xx.
 2. Azure Monitor metric alert fires.
-3. Azure Monitor incidents are enabled on the SRE Agent.
-4. The `grubify-http-errors` response plan routes the incident to `incident-handler`.
+3. The action group calls the ServiceNow Logic App.
+4. The Logic App opens a ServiceNow incident and forwards the enriched payload to the SRE Agent.
+5. The `grubify-http-errors` response plan routes the incident to `incident-handler`, which updates and resolves the ServiceNow record.
 
 ---
 

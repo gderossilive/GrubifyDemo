@@ -1,10 +1,10 @@
 # Grubify ServiceNow Incident Flow
 
-This document describes the optional ServiceNow Azure Resource Handler path for Grubify HTTP 5xx incidents.
+This document describes the primary ServiceNow incident-routing path for Grubify HTTP 5xx incidents.
 
 ## Purpose
 
-When ServiceNow integration is enabled, Azure Monitor alerts do not call the SRE Agent trigger directly. They call a Logic App first. The Logic App creates a ServiceNow incident, then forwards the original Azure Monitor alert plus ServiceNow incident metadata to the SRE Agent HTTP trigger.
+Azure Monitor remains the metric signal source for HTTP 5xx detection, but ServiceNow is the incident system of record. Azure Monitor alerts call a Logic App first. The Logic App creates a ServiceNow incident, then forwards the original Azure Monitor alert plus ServiceNow incident metadata to the SRE Agent HTTP trigger.
 
 ## Flow
 
@@ -21,6 +21,7 @@ The SRE Agent receives a JSON body with these top-level fields:
 
 - `source`: `servicenow-azure-resource-handler`
 - `workflow`: Logic App workflow name
+- `correlationId`: stable alert correlation value derived from the Azure alert payload
 - `commonAlertSchema`: original Azure Monitor common alert schema payload
 - `serviceNow.sysId`: ServiceNow incident sys_id
 - `serviceNow.number`: ServiceNow incident number, for example `INC0012345`
@@ -29,15 +30,19 @@ The SRE Agent receives a JSON body with these top-level fields:
 
 ## Agent Behavior
 
-When a `serviceNow` object is present, treat that incident as the system-of-record ticket.
+The `serviceNow` object is expected in the normal Grubify incident path. Treat that incident as the system-of-record ticket.
 
 Expected lifecycle:
 
 1. Acknowledge the ServiceNow incident if `AcknowledgeServiceNowIncident` is available.
-2. Run the normal Grubify HTTP 5xx diagnostic workflow.
-3. Add a ServiceNow discussion entry containing root cause, key evidence, remediation steps, and links to any GitHub issue or Teams summary.
-4. Resolve the ServiceNow incident after impact clears if `ResolveServiceNowIncident` is available.
-5. If ServiceNow tools are unavailable, complete the SRE investigation and include the ServiceNow incident number and URL in the final report.
+2. Fetch the current ServiceNow incident state with `GetServiceNowIncident` when available.
+3. Add a ServiceNow discussion entry that autonomous investigation has started, including correlation ID, affected resource, and investigation window when available.
+4. Run the normal Grubify HTTP 5xx diagnostic workflow.
+5. Add a ServiceNow discussion entry with key evidence, suspected or confirmed root cause, and the planned remediation.
+6. Before remediation, post the planned action. After remediation, post what changed and any resource or command evidence.
+7. After verification, post final impact status and links to any GitHub issue or Teams summary.
+8. Resolve the ServiceNow incident after impact clears if `ResolveServiceNowIncident` is available.
+9. If ServiceNow tools are unavailable, complete the SRE investigation and include the ServiceNow incident number and URL in the final report.
 
 ## ServiceNow Fields
 
@@ -49,12 +54,14 @@ The Logic App creates incidents with these default fields:
 - `urgency`: `2`
 - `impact`: `2`
 - `contact_type`: `integration`
+- `correlation_id`: Azure alert origin ID or alert ID
+- `correlation_display`: `Grubify HTTP 5xx signal`
 - `assignment_group`: optional value from `SERVICENOW_ASSIGNMENT_GROUP`
-- `comments`: serialized Azure Monitor alert payload
+- `comments`: Azure alert identifiers, investigation link, and SRE Agent handoff note
 
 ## Troubleshooting
 
-Check whether ServiceNow is enabled locally:
+Check whether ServiceNow routing is enabled locally:
 
 ```bash
 grep ENABLE_SERVICENOW_HANDLER .env
@@ -87,4 +94,4 @@ az logic workflow run list \
   -o table
 ```
 
-If no ServiceNow incident is created, verify `SERVICENOW_INSTANCE_URL`, `SERVICENOW_USERNAME`, and `SERVICENOW_PASSWORD` in `.env`, then rerun `./scripts/deploy-sre-agent.sh`.
+If no ServiceNow incident is created, verify `SERVICENOW_INSTANCE` or `SERVICENOW_INSTANCE_URL`, `SERVICENOW_USERNAME`, and `SERVICENOW_PASSWORD` in `.env`, then rerun `./scripts/deploy-sre-agent.sh`.

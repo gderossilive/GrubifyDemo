@@ -31,29 +31,40 @@ param tags object = {
 }
 
 var normalizedInstanceUrl = trim(serviceNowInstanceUrl)
+var alertCorrelationId = '@{coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'originAlertId\'], triggerBody()?[\'data\']?[\'essentials\']?[\'alertId\'], workflow().run.name)}'
+var readableAlertShortDescription = '@{concat(\'Grubify: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'alertRule\'], \'Azure Monitor alert\'))}'
+var readableAlertDescription = '@{concat(\'Grubify Azure Monitor Alert\', decodeUriComponent(\'%0A%0A\'), \'Alert rule: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'alertRule\'], \'n/a\'), decodeUriComponent(\'%0A\'), \'Severity: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'severity\'], \'n/a\'), decodeUriComponent(\'%0A\'), \'Condition: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'monitorCondition\'], \'n/a\'), decodeUriComponent(\'%0A\'), \'Signal type: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'signalType\'], \'n/a\'), decodeUriComponent(\'%0A\'), \'Fired at: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'firedDateTime\'], \'n/a\'), decodeUriComponent(\'%0A%0A\'), \'Affected resource(s):\', decodeUriComponent(\'%0A- \'), join(coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'alertTargetIDs\'], createArray(\'n/a\')), decodeUriComponent(\'%0A- \')), decodeUriComponent(\'%0A%0A\'), \'Description:\', decodeUriComponent(\'%0A\'), coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'description\'], \'No alert description provided.\'))}'
+var readableAlertComments = '@{concat(\'Created automatically by the Grubify ServiceNow incident router.\', decodeUriComponent(\'%0A%0A\'), \'Correlation ID: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'originAlertId\'], triggerBody()?[\'data\']?[\'essentials\']?[\'alertId\'], workflow().run.name), decodeUriComponent(\'%0A\'), \'Azure alert ID: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'alertId\'], \'n/a\'), decodeUriComponent(\'%0A\'), \'Origin alert ID: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'originAlertId\'], \'n/a\'), decodeUriComponent(\'%0A\'), \'Investigation link: \', coalesce(triggerBody()?[\'data\']?[\'essentials\']?[\'investigationLink\'], \'n/a\'), decodeUriComponent(\'%0A%0A\'), \'The SRE Agent has been notified and will investigate/remediate autonomously.\')}'
 var incidentPayload = empty(serviceNowAssignmentGroup) ? {
-  short_description: 'Grubify Azure Monitor alert'
-  description: '@{string(triggerBody())}'
+  short_description: readableAlertShortDescription
+  description: readableAlertDescription
   category: serviceNowCategory
   urgency: '2'
   impact: '2'
   contact_type: 'integration'
-  comments: '@{string(triggerBody())}'
+  correlation_id: alertCorrelationId
+  correlation_display: 'Grubify HTTP 5xx signal'
+  comments: readableAlertComments
 } : {
-  short_description: 'Grubify Azure Monitor alert'
-  description: '@{string(triggerBody())}'
+  short_description: readableAlertShortDescription
+  description: readableAlertDescription
   category: serviceNowCategory
   urgency: '2'
   impact: '2'
   contact_type: 'integration'
   assignment_group: serviceNowAssignmentGroup
-  comments: '@{string(triggerBody())}'
+  correlation_id: alertCorrelationId
+  correlation_display: 'Grubify HTTP 5xx signal'
+  comments: readableAlertComments
 }
 
 resource serviceNowWorkflow 'Microsoft.Logic/workflows@2019-05-01' = {
   name: logicAppName
   location: location
   tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     state: 'Enabled'
     parameters: {
@@ -127,12 +138,17 @@ resource serviceNowWorkflow 'Microsoft.Logic/workflows@2019-05-01' = {
           inputs: {
             method: 'POST'
             uri: '@parameters(\'sreTriggerUrl\')'
+            authentication: {
+              type: 'ManagedServiceIdentity'
+              audience: 'https://azuresre.ai'
+            }
             headers: {
               'Content-Type': 'application/json'
             }
             body: {
               source: 'servicenow-azure-resource-handler'
               workflow: '@{workflow().name}'
+              correlationId: alertCorrelationId
               commonAlertSchema: '@triggerBody()'
               serviceNow: {
                 sysId: '@{body(\'Create_ServiceNow_incident\')?[\'result\']?[\'sys_id\']}'
@@ -167,5 +183,6 @@ resource serviceNowWorkflow 'Microsoft.Logic/workflows@2019-05-01' = {
 
 output logicAppName string = serviceNowWorkflow.name
 output logicAppId string = serviceNowWorkflow.id
+output logicAppPrincipalId string = serviceNowWorkflow.identity.principalId
 #disable-next-line outputs-should-not-contain-secrets
 output callbackUrl string = listCallbackUrl('${serviceNowWorkflow.id}/triggers/manual', serviceNowWorkflow.apiVersion).value

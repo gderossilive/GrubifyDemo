@@ -6,7 +6,7 @@
 ## Scope
 This runbook is for the actual Grubify Incident Lab in `demos/GrubifyIncidentLab`.
 
-Use it when the backend Azure Container App deployed by this lab starts returning HTTP 5xx and Azure Monitor routes the incident to the SRE Agent.
+Use it when the backend Azure Container App deployed by this lab starts returning HTTP 5xx and a ServiceNow-backed incident reaches the SRE Agent. Azure Monitor supplies the metric signal; ServiceNow owns the incident record.
 
 This runbook is tied to:
 

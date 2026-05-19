@@ -1,7 +1,7 @@
 #!/bin/bash
 # deploy-sre-agent.sh
-# Deploys a Grubify SRE Agent and wires it to Azure Monitor alerts, knowledge,
-# core sub-agents, incident response filters, and optional ServiceNow/Teams paths.
+# Deploys a Grubify SRE Agent and wires Azure Monitor signals to ServiceNow-backed
+# incidents, knowledge, core sub-agents, incident response filters, and optional Teams paths.
 
 set -euo pipefail
 
@@ -52,7 +52,8 @@ else
   GITHUB_REPO_NAME="${GITHUB_REPO_NAME:-GrubifyDemo}"
 fi
 GITHUB_ACCESS_TOKEN="${GITHUB_PAT:-${GITHUB_TOKEN:-}}"
-ENABLE_SERVICENOW_HANDLER="${ENABLE_SERVICENOW_HANDLER:-false}"
+ENABLE_SERVICENOW_HANDLER="${ENABLE_SERVICENOW_HANDLER:-}"
+SERVICENOW_INSTANCE="${SERVICENOW_INSTANCE:-}"
 SERVICENOW_INSTANCE_URL="${SERVICENOW_INSTANCE_URL:-}"
 SERVICENOW_USERNAME="${SERVICENOW_USERNAME:-}"
 SERVICENOW_PASSWORD="${SERVICENOW_PASSWORD:-}"
@@ -65,6 +66,16 @@ TEAMS_GROUP_ID="${TEAMS_GROUP_ID:-231764ec-b797-41aa-988e-5a9a4c3bd49d}"
 TEAMS_CHANNEL_ID="${TEAMS_CHANNEL_ID:-19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2}"
 TEAMS_CLIENT_ID="${TEAMS_CLIENT_ID:-}"
 TEAMS_CLIENT_SECRET="${TEAMS_CLIENT_SECRET:-}"
+
+if [[ -z "$SERVICENOW_INSTANCE_URL" && -n "$SERVICENOW_INSTANCE" ]]; then
+  if [[ "$SERVICENOW_INSTANCE" == http://* || "$SERVICENOW_INSTANCE" == https://* ]]; then
+    SERVICENOW_INSTANCE_URL="${SERVICENOW_INSTANCE%/}"
+  else
+    SERVICENOW_INSTANCE_URL="https://${SERVICENOW_INSTANCE%.service-now.com}.service-now.com"
+  fi
+fi
+
+ENABLE_SERVICENOW_HANDLER="${ENABLE_SERVICENOW_HANDLER:-true}"
 
 SERVICENOW_HANDLER_ENABLED="false"
 case "${ENABLE_SERVICENOW_HANDLER,,}" in
@@ -82,11 +93,43 @@ if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
   [[ -n "$SERVICENOW_USERNAME" ]] || missing_servicenow_vars+=(SERVICENOW_USERNAME)
   [[ -n "$SERVICENOW_PASSWORD" ]] || missing_servicenow_vars+=(SERVICENOW_PASSWORD)
   if (( ${#missing_servicenow_vars[@]} > 0 )); then
-    echo "ServiceNow integration is enabled, but missing: ${missing_servicenow_vars[*]}" >&2
-    echo "Set these in .env or disable with ENABLE_SERVICENOW_HANDLER=false" >&2
+    echo "ServiceNow incident routing is enabled, but missing: ${missing_servicenow_vars[*]}" >&2
+    echo "Set these in .env or explicitly use direct SRE fallback with ENABLE_SERVICENOW_HANDLER=false" >&2
     exit 1
   fi
 fi
+
+if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
+  SERVICENOW_CONNECTION_KEY=$(printf '%s:%s' "$SERVICENOW_USERNAME" "$SERVICENOW_PASSWORD" | base64 | tr -d '\n')
+else
+  SERVICENOW_CONNECTION_KEY=""
+fi
+
+build_incident_management_config() {
+  if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
+    python3 - "$SERVICENOW_INSTANCE_URL" "$SERVICENOW_CONNECTION_KEY" <<'PY'
+import json
+import sys
+
+connection_url, connection_key = sys.argv[1:3]
+print(json.dumps({
+    "type": "ServiceNow",
+    "connectionName": "servicenow",
+    "connectionUrl": connection_url,
+    "connectionKey": connection_key,
+}))
+PY
+  else
+    python3 - <<'PY'
+import json
+
+print(json.dumps({
+    "type": "AzMonitor",
+    "connectionName": "azmonitor",
+}))
+PY
+  fi
+}
 
 render_sre_config() {
   local config_file="$1"
@@ -306,6 +349,8 @@ echo "  Teams        : $TEAMS_CONNECTOR_ENABLED"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 az account set --subscription "$SUBSCRIPTION"
+INCIDENT_MANAGEMENT_CONFIG=$(build_incident_management_config)
+INCIDENT_MANAGEMENT_CONFIG_PROPERTIES=$(echo "$INCIDENT_MANAGEMENT_CONFIG" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",\n          ".join(f"\"{key}\": {json.dumps(value)}" for key, value in d.items()))')
 
 # -- 1. Resource group ---------------------------------------------------------
 echo ""
@@ -400,8 +445,7 @@ else
           \"${IDENTITY_ID}\": {}
         }
       },
-      \"properties\": {
-        \"actionConfiguration\": {
+          ${INCIDENT_MANAGEMENT_CONFIG_PROPERTIES}
           \"accessLevel\": \"High\",
           \"mode\": \"autonomous\",
           \"identity\": \"${IDENTITY_ID}\"
@@ -431,6 +475,32 @@ else
       }
     }" \
     --output none
+fi
+
+CURRENT_INCIDENT_PLATFORM=$(az resource show \
+  --resource-group "$SRE_RG" \
+  --resource-type "Microsoft.App/agents" \
+  --name "$AGENT_NAME" \
+  --api-version "2026-01-01" \
+  --query "properties.incidentManagementConfiguration.type" -o tsv 2>/dev/null || true)
+DESIRED_INCIDENT_PLATFORM=$(echo "$INCIDENT_MANAGEMENT_CONFIG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["type"])')
+if [[ "$CURRENT_INCIDENT_PLATFORM" != "$DESIRED_INCIDENT_PLATFORM" ]]; then
+  PATCH_BODY=$(python3 - "$INCIDENT_MANAGEMENT_CONFIG" <<'PY'
+import json
+import sys
+
+incident_management_config = json.loads(sys.argv[1])
+print(json.dumps({"properties": {"incidentManagementConfiguration": incident_management_config}}))
+PY
+)
+  az rest \
+    --method patch \
+    --url "https://management.azure.com/subscriptions/${SUBSCRIPTION}/resourceGroups/${SRE_RG}/providers/Microsoft.App/agents/${AGENT_NAME}?api-version=2026-01-01" \
+    --body "$PATCH_BODY" \
+    --output none
+  echo "  ✓ Incident platform set to $DESIRED_INCIDENT_PLATFORM"
+else
+  echo "  ✓ Incident platform already $DESIRED_INCIDENT_PLATFORM"
 fi
 
 AGENT_ENDPOINT=$(az resource show \
@@ -506,9 +576,9 @@ AG_ID=$(az monitor action-group show \
   --query id -o tsv)
 echo "  ✓ $ACTION_GROUP_NAME"
 
-# -- 6. HTTP 5xx alert on Grubify API -----------------------------------------
+# -- 6. HTTP 5xx signal on Grubify API ----------------------------------------
 echo ""
-echo "▶ Step 6/12 — HTTP 5xx alert"
+echo "▶ Step 6/12 — HTTP 5xx signal"
 CA_API_ID=$(az containerapp show -g "$APP_RG" -n "ca-${SUFFIX}-api" --query id -o tsv 2>/dev/null || \
            az containerapp list -g "$APP_RG" -o json | python3 -c "import json,sys; apps=json.load(sys.stdin); print([a['id'] for a in apps if 'api' in a['name']][0])")
 if [[ -z "$CA_API_ID" ]]; then
@@ -522,7 +592,7 @@ else
     --window-size 5m \
     --evaluation-frequency 1m \
     --severity 2 \
-    --description "Alert when Grubify returns HTTP 5xx errors — triggers SRE Agent investigation" \
+    --description "Signal when Grubify returns HTTP 5xx errors — opens a ServiceNow-backed SRE investigation" \
     --auto-mitigate false \
     --action "$AG_ID" \
     --output none
@@ -656,7 +726,7 @@ else
   echo "  ⚠ No sre-config/agents/ directory found — skipping"
 fi
 
-# -- 10. Response plans (HTTP triggers for Azure Monitor alerts) ---------------
+# -- 10. Response plans (HTTP triggers for ServiceNow-backed incidents) --------
 echo ""
 echo "▶ Step 10/12 — Alert response plans"
 RP_DIR="${SCRIPT_DIR}/../sre-config/response-plans"
@@ -749,9 +819,9 @@ AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --
 upsert_incident_filter "Grubify-Alert" "" "Sev2" "$ALERT_NAME" ""
 upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors" "Sev3" "Grubify HTTP 5xx Errors" "incident-handler"
 
-# -- 11. Optional ServiceNow Azure Resource Handler ---------------------------
+# -- 11. ServiceNow incident routing ------------------------------------------
 echo ""
-echo "▶ Step 11/12 — ServiceNow Azure Resource Handler"
+echo "▶ Step 11/12 — ServiceNow incident routing"
 if [[ -z "${SRE_TRIGGER_URL:-}" && -f "${SCRIPT_DIR}/../.azure/sre-trigger-url" ]]; then
   SRE_TRIGGER_URL=$(<"${SCRIPT_DIR}/../.azure/sre-trigger-url")
 fi
@@ -761,8 +831,9 @@ if [[ -z "${SRE_TRIGGER_URL:-}" ]]; then
 elif [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
   SERVICENOW_TEMPLATE="${SCRIPT_DIR}/../infra/servicenow-logic-app.bicep"
   if [[ ! -f "$SERVICENOW_TEMPLATE" ]]; then
-    echo "  ⚠ Missing $SERVICENOW_TEMPLATE — falling back to direct SRE webhook"
-    wire_action_group_webhook "sre-incident-handler" "$SRE_TRIGGER_URL"
+    echo "  ✗ Missing $SERVICENOW_TEMPLATE — cannot configure ServiceNow incident routing" >&2
+    echo "    Set ENABLE_SERVICENOW_HANDLER=false only when you intentionally want direct SRE webhook fallback." >&2
+    exit 1
   else
     deployment_name="servicenow-handler-$(date -u +%Y%m%d%H%M%S)"
     deploy_output=$(az deployment group create \
@@ -788,7 +859,7 @@ elif [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
     wire_action_group_webhook "servicenow-azure-resource-handler" "$SERVICENOW_CALLBACK_URL"
   fi
 else
-  echo "  ℹ ServiceNow integration disabled — using direct SRE Agent webhook"
+  echo "  ℹ ServiceNow incident routing disabled — using direct SRE Agent webhook fallback"
   wire_action_group_webhook "sre-incident-handler" "$SRE_TRIGGER_URL"
 fi
 
@@ -807,6 +878,7 @@ echo ""
 echo "  Next steps:"
 echo "  1. Open https://sre.azure.com and verify the agent is running"
 echo "  2. Authorize the GitHub repo (${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}) via the Code card in the portal"
-echo "  3. If Teams is enabled, verify/register the Teams connector in the portal"
-echo "  4. Run ./scripts/break-app.sh to trigger an incident demo"
+echo "  3. Verify ServiceNow incidents are created for Grubify HTTP 5xx signals"
+echo "  4. If Teams is enabled, verify/register the Teams connector in the portal"
+echo "  5. Run ./scripts/break-app.sh to trigger an incident demo"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

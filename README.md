@@ -78,15 +78,21 @@ This creates:
 
 The SRE Agent deployment script creates a dedicated SRE resource group,
 Application Insights, a managed identity, Azure Monitor HTTP 5xx alerting,
-knowledge uploads, custom sub-agents, and the response-plan webhook.
+ServiceNow incident routing, knowledge uploads, custom sub-agents, and the
+response-plan webhook. Azure Monitor supplies the HTTP 5xx signal; ServiceNow
+is the incident system of record.
 
 Create a local `.env` file with your subscription and optional notification
-settings:
+settings, plus ServiceNow credentials for incident routing:
 
 ```bash
 AZURE_SUBSCRIPTION_ID=<your-subscription-id>
 AZURE_LOCATION=swedencentral
 INCIDENT_NOTIFICATION_EMAIL=<optional-email-address>
+SERVICENOW_INSTANCE=<instance>
+# Or set SERVICENOW_INSTANCE_URL=https://<instance>.service-now.com
+SERVICENOW_USERNAME=<servicenow-user>
+SERVICENOW_PASSWORD=<servicenow-password>
 ```
 
 Then run:
@@ -101,6 +107,7 @@ This creates:
 - **Action Group**: `ag-sre-grubify`
 - **HTTP 5xx Alert**: `alert-http-5xx-grubify`
 - **SRE Trigger URL**: saved locally in `.azure/sre-trigger-url`
+- **ServiceNow Logic App URL**: saved locally in `.azure/servicenow-handler-url`
 
 The deployment uploads all Markdown files in `knowledge/` and checks whether
 they are indexed by SRE Agent memory. It also deploys a fixed sub-agent
@@ -109,36 +116,38 @@ allow-list: `code-analyzer`, `issue-triager`, and `incident-handler-core`.
 and is intentionally skipped because it shares the same `spec.name` as the core
 handler.
 
-### 5. Optional ServiceNow Azure Resource Handler
+### 5. ServiceNow Incident Routing
 
-The ServiceNow integration follows the ServiceNowAzureResourceHandler pattern
-from the AzSreAgentLab parent demo:
+ServiceNow is the primary incident platform for the Grubify incident demo. The
+deployment follows the ServiceNowAzureResourceHandler pattern from the
+AzSreAgentLab parent demo:
 
 ```text
 Azure Monitor alert -> Logic App -> ServiceNow incident -> SRE Agent
 ```
 
-To enable it, add ServiceNow settings to `.env` before running
-`./scripts/deploy-sre-agent.sh`:
+ServiceNow routing is enabled by default. Add these settings to `.env` before
+running `./scripts/deploy-sre-agent.sh`:
 
 ```bash
 ENABLE_SERVICENOW_HANDLER=true
-SERVICENOW_INSTANCE_URL=https://<instance>.service-now.com
+SERVICENOW_INSTANCE=<instance>
+# Or set SERVICENOW_INSTANCE_URL=https://<instance>.service-now.com
 SERVICENOW_USERNAME=<servicenow-user>
 SERVICENOW_PASSWORD=<servicenow-password>
 SERVICENOW_ASSIGNMENT_GROUP=<optional-assignment-group>
 SERVICENOW_CATEGORY=software
 ```
 
-When enabled, the script deploys Logic App
+The script deploys Logic App
 `la-grubify-servicenow-handler` into `rg-grubify-sre`, stores its callback URL
 in `.azure/servicenow-handler-url`, and points `ag-sre-grubify` at the Logic
 App. The Logic App creates the ServiceNow incident first, then forwards the
 original Azure Monitor alert plus `serviceNow.number`, `serviceNow.sysId`, and
 `serviceNow.url` to the SRE Agent trigger.
 
-If `ENABLE_SERVICENOW_HANDLER` is omitted or set to `false`, the existing direct
-Azure Monitor -> SRE Agent webhook path is used.
+Set `ENABLE_SERVICENOW_HANDLER=false` only when you intentionally want the
+direct Azure Monitor -> SRE Agent webhook fallback for local testing.
 
 Verify the ServiceNow route:
 
@@ -204,7 +213,7 @@ Now you have:
 **SRE Agent Setup:**
 1. **Deploy agent** with `./scripts/deploy-sre-agent.sh`
 2. **Authorize the GitHub repo**: **https://github.com/gderossilive/GrubifyDemo** in the SRE Agent portal if prompted
-3. **Enable ServiceNow** with the `.env` variables above when you want the Logic App incident path
+3. **Configure ServiceNow** with the `.env` variables above so ServiceNow owns the incident record
 4. **Enable Teams** with the `.env` variables above and portal connector setup when you want Teams notifications
 5. **Simulate memory leak** with `./scripts/break-app.sh`
 6. **Review the run** in ServiceNow, the SRE Agent portal, Teams, and GitHub depending on configured connectors

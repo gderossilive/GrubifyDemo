@@ -1,8 +1,9 @@
 # Response Plan: Grubify HTTP 5xx Alerts
 #
-# This configures an HTTP trigger in the SRE Agent so that when Azure Monitor
-# fires the HTTP 5xx alert for Grubify, it calls the webhook URL and the
-# incident-handler sub-agent automatically investigates and mitigates.
+# This configures an HTTP trigger in the SRE Agent so that ServiceNow-backed
+# Grubify HTTP 5xx incidents automatically invoke the incident-handler sub-agent.
+# Azure Monitor remains the metric signal source; ServiceNow is the incident
+# system of record.
 #
 # Deployment:
 #   - The deploy script (scripts/deploy-sre-agent.sh) creates this trigger via
@@ -10,42 +11,51 @@
 #   - The resulting triggerUrl is stored in .azure/sre-trigger-url for reference.
 #
 # Default path:
-# Azure Monitor Alert -> Action Group (webhook) -> SRE Agent HTTP Trigger
-#                                                -> incident-handler sub-agent
-#
-# Optional ServiceNow path:
 # Azure Monitor Alert -> Action Group (webhook) -> Logic App ServiceNow handler
 #   -> ServiceNow incident -> SRE Agent HTTP Trigger -> incident-handler
+#
+# Direct fallback path, only when ENABLE_SERVICENOW_HANDLER=false:
+# Azure Monitor Alert -> Action Group (webhook) -> SRE Agent HTTP Trigger
 
 name: grubify-http-5xx-response-plan
 description: >
   Automatically triggers the incident-handler agent to investigate and mitigate
   HTTP 5xx errors in the Grubify Container Apps (frontend + API).
 
-# Which sub-agent handles alerts fired by this trigger.
+# Which sub-agent handles incidents fired by this trigger.
 # incident-handler will:
 #   1. Search knowledge base for the http-500-errors runbook
 #   2. Query App Insights and Log Analytics for error context
 #   3. Attempt remediation (scale out, restart, config changes)
-#   4. Create a GitHub issue with RCA findings
+#   4. Update ServiceNow throughout the lifecycle
+#   5. Hand off source-code analysis to code-analyzer when needed
 agent: incident-handler
 
 # The prompt injected into the thread when the trigger fires.
-# Azure Monitor posts the alert payload as JSON in the request body —
-# the agent receives it as context and should extract resourceId, alertName, etc.
+# The ServiceNow incident router posts an enriched payload with serviceNow
+# metadata and the original Azure Monitor common alert schema.
 agentPrompt: |
-  An Azure Monitor alert has fired for the Grubify application.
-  The alert payload in the incoming request contains the affected resource,
-  metric thresholds breached, and timestamps.
+   A ServiceNow-backed HTTP 5xx incident has opened for the Grubify application.
+   Azure Monitor supplied the metric signal, and the original common alert schema
+   is available in commonAlertSchema for affected resources, thresholds, and
+   timestamps.
 
-   If the payload contains source = "servicenow-azure-resource-handler" and a
-   serviceNow object, then this incident was first opened in ServiceNow by the
-   Grubify ServiceNow Azure Resource Handler. Treat serviceNow.number,
-   serviceNow.sysId, and serviceNow.url as the ServiceNow incident record for
-   this investigation. Acknowledge it, add diagnosis/remediation notes, and
-   resolve it after successful remediation when the ServiceNow tools are
-   available. If those tools are not available, include the ServiceNow URL and
-   incident number in the final report.
+   The payload is expected to contain source = "servicenow-azure-resource-handler"
+   and a serviceNow object. Treat serviceNow.number, serviceNow.sysId, and
+   serviceNow.url as the ServiceNow incident record for this investigation.
+   Maintain that incident throughout the lifecycle: acknowledge it immediately,
+   post an investigation-start note, post diagnostic findings, post planned and
+   completed remediation actions, post verification status, and resolve it after
+   successful remediation when the ServiceNow tools are available. If the
+   serviceNow object or tools are unavailable, continue the investigation and
+   call out the missing ServiceNow context in the final report.
+
+   The incident-handler must NEVER interact with source code. Do not inspect
+   repository files, source files, commits, diffs, pull requests, branches, code
+   search results, or code snippets. Do not create patches or propose code
+   edits. If code-level root cause analysis or source-code correlation is
+   needed, hand that work to the code-analyzer sub-agent and continue with
+   runtime diagnostics only.
 
   Follow these steps:
   1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.
@@ -56,7 +66,7 @@ agentPrompt: |
   4. Identify root cause, then attempt remediation:
      - If memory pressure: restart the container app revision
      - If dependency failure: report and escalate
-     - If code error: identify the failing endpoint and log the error stack
+     - If code error is suspected: identify the failing endpoint and log error evidence, then hand off source-code analysis to code-analyzer
   5. Summarize findings and remediation actions in a clear incident report.
      Search memory for the "incident report template" and follow it exactly.
 
