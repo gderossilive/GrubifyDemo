@@ -16,41 +16,37 @@ and remediate.
 
 ## Working directory
 
-Always run commands from the GrubifyIncidentLab demo directory:
+Run commands from this repository workspace:
 
 ```bash
-cd /workspaces/AzSreAgentLab/demos/GrubifyIncidentLab
+cd /workspaces/GrubifyDemo
 ```
 
 ## Step 1: Source environment values
 
 ```bash
-echo "APP_URL=$(azd env get-value CONTAINER_APP_URL 2>/dev/null)"
-echo "RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null)"
-echo "AGENT=$(azd env get-value SRE_AGENT_NAME 2>/dev/null)"
-echo "AGENT_ENDPOINT=$(azd env get-value SRE_AGENT_ENDPOINT 2>/dev/null)"
+APP_URL="https://$(az containerapp show -g rg-grubify-app-ids7x -n ca-grubify-api-ids7x --query properties.configuration.ingress.fqdn -o tsv)"
+SRE_RG="rg-grubify-sre-sn-test-05191511"
+AGENT="sre-agent-grubify"
 ```
 
-All four values must be set.
+All values must be set. Use environment-specific resource group names if your deployment uses a different token.
 
 ## Step 2: Verify prerequisites
 
 ### 2a) Grubify is healthy
 
 ```bash
-APP_URL=$(azd env get-value CONTAINER_APP_URL 2>/dev/null)
-curl -s -o /dev/null -w "Health: HTTP %{http_code}\n" "${APP_URL}/health"
+APP_URL="https://$(az containerapp show -g rg-grubify-app-ids7x -n ca-grubify-api-ids7x --query properties.configuration.ingress.fqdn -o tsv)"
 curl -s -o /dev/null -w "Restaurants: HTTP %{http_code}\n" "${APP_URL}/api/restaurants"
 ```
 
-`/api/restaurants` must return HTTP 200. `/health` may return 404 if the app has no health endpoint — that is acceptable as long as the API endpoints work.
+`/api/restaurants` must return HTTP 200. The current API has no dedicated `/health` endpoint.
 
 ### 2b) SRE Agent is Autonomous
 
 ```bash
-RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null)
-AGENT=$(azd env get-value SRE_AGENT_NAME 2>/dev/null)
-az resource show -g "$RG" -n "$AGENT" \
+az resource show -g "$SRE_RG" -n "$AGENT" \
   --resource-type Microsoft.App/agents \
   --query '{mode:properties.actionConfiguration.mode, accessLevel:properties.actionConfiguration.accessLevel}' -o json
 ```
@@ -60,7 +56,12 @@ Must show `mode: autonomous`.
 ## Step 3: Trigger the memory leak
 
 ```bash
-./scripts/break-app.sh
+url="${APP_URL}/api/cart/demo-user/items"
+body='{"foodItemId":1,"quantity":1,"specialInstructions":"demo memory pressure"}'
+for i in $(seq 1 200); do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -X POST -H "Content-Type: application/json" -d "$body" "$url"
+done | sort | uniq -c
 ```
 
 This sends 200 rapid POST requests to `/api/cart/demo-user/items`, flooding the in-memory cart
@@ -69,8 +70,9 @@ pressure builds.
 
 ## Step 4: Wait for alert + agent investigation
 
-- Wait **5-8 minutes** for memory pressure to build and Azure Monitor to fire the HTTP 5xx alert
-- Direct the user to open https://sre.azure.com → **Incidents** to watch the agent in real time
+- Wait **5-8 minutes** for memory pressure to build and Azure Monitor to fire the HTTP 5xx alert.
+- Azure Monitor calls the action group's Logic App receiver. The Logic App creates a ServiceNow incident and acknowledges the Azure Monitor alert.
+- Direct the user to open ServiceNow and https://sre.azure.com → **Incidents** to watch the ServiceNow-backed investigation.
 
 ### What the agent does autonomously
 
@@ -81,13 +83,14 @@ pressure builds.
 5. Executes remediation (restart or scale the container)
 6. Generates Python charts as evidence
 7. Stores findings in memory for future incident correlation
+8. Updates the ServiceNow incident throughout the lifecycle
 
 ## Step 5: Verify recovery
 
 After the agent remediates:
 
 ```bash
-APP_URL=$(azd env get-value CONTAINER_APP_URL 2>/dev/null)
+APP_URL="https://$(az containerapp show -g rg-grubify-app-ids7x -n ca-grubify-api-ids7x --query properties.configuration.ingress.fqdn -o tsv)"
 curl -s -o /dev/null -w "Restaurants: HTTP %{http_code}\n" "${APP_URL}/api/restaurants"
 ```
 
@@ -98,15 +101,16 @@ Should return HTTP 200.
 To manually reset the demo without waiting for the agent, restart the active revision:
 
 ```bash
-RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null)
-CA_NAME=$(az containerapp list -g "$RG" --query "[?contains(name,'grubify')&&!contains(name,'fe')].name" -o tsv)
+RG="rg-grubify-app-ids7x"
+CA_NAME="ca-grubify-api-ids7x"
 REVISION=$(az containerapp revision list -g "$RG" -n "$CA_NAME" --query '[0].name' -o tsv)
 az containerapp revision restart -g "$RG" -n "$CA_NAME" --revision "$REVISION"
 ```
 
 ## Success criteria
 
-- [ ] `break-app.sh` completes with errors in the final requests (memory pressure)
+- [ ] The cart POST burst completes with errors in the final requests (memory pressure)
+- [ ] Logic App creates a ServiceNow incident
 - [ ] SRE Agent portal shows an incident being investigated
 - [ ] Agent identifies memory leak / OOM as root cause
 - [ ] Container app recovers (HTTP 200 on API endpoints)

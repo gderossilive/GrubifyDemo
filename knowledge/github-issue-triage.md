@@ -154,7 +154,7 @@ Thanks for the suggestion for Grubify!
 ```
 🤖 **Grubify SRE Agent Bot**
 
-[Answer the question based on the grubify-architecture knowledge base document]
+[Answer the question based on the Grubify knowledge base documents]
 
 📖 Status: **Question answered**
 ```
