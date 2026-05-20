@@ -35,14 +35,10 @@ The `serviceNow` object is expected in the normal Grubify incident path. Treat t
 Expected lifecycle:
 
 1. Acknowledge the ServiceNow incident if `AcknowledgeServiceNowIncident` is available.
-2. Fetch the current ServiceNow incident state with `GetServiceNowIncident` when available.
-3. Add a ServiceNow discussion entry that autonomous investigation has started, including correlation ID, affected resource, and investigation window when available.
-4. Run the normal Grubify HTTP 5xx diagnostic workflow.
-5. Add a ServiceNow discussion entry with key evidence, suspected or confirmed root cause, and the planned remediation.
-6. Before remediation, post the planned action. After remediation, post what changed and any resource or command evidence.
-7. After verification, post final impact status and links to any GitHub issue or Teams summary.
-8. Resolve the ServiceNow incident after impact clears if `ResolveServiceNowIncident` is available.
-9. If ServiceNow tools are unavailable, complete the SRE investigation and include the ServiceNow incident number and URL in the final report.
+2. Run the normal Grubify HTTP 5xx diagnostic workflow.
+3. Add a ServiceNow discussion entry containing root cause, key evidence, remediation steps, and links to any GitHub issue or Teams summary.
+4. Resolve the ServiceNow incident after impact clears if `ResolveServiceNowIncident` is available.
+5. If ServiceNow tools are unavailable, complete the SRE investigation and include the ServiceNow incident number and URL in the final report.
 
 ## ServiceNow Fields
 

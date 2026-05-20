@@ -27,27 +27,8 @@ description: >
 #   1. Search knowledge base for the http-500-errors runbook
 #   2. Query App Insights and Log Analytics for error context
 #   3. Attempt remediation (scale out, restart, config changes)
-#   4. Update ServiceNow throughout the lifecycle
-#   5. Hand off source-code analysis to code-analyzer when needed
+#   4. Create a GitHub issue with RCA findings
 agent: incident-handler
-
-# Portal response plan filter. These values mirror the SRE Agent portal object
-# at /api/v1/incidentPlayground/filters/grubify-http-errors.
-responsePlanFilter:
-   id: grubify-http-errors
-   name: Grubify HTTP Errors Filter
-   documentType: IncidentFilterServiceNow
-   partitionKey: IncidentFilterServiceNow
-   incidentType: ServiceNow
-   priorities: []
-   titleContains: alert-http-5xx-grubify
-   handlingAgent: incident-handler
-   agentMode: autonomous
-   isEnabled: true
-   maxAutomatedInvestigationAttempts: 3
-   deepInvestigationEnabled: false
-   mergeEnabled: true
-   mergeWindowHours: 3
 
 # The prompt injected into the thread when the trigger fires.
 # The ServiceNow incident router posts an enriched payload with serviceNow
@@ -61,32 +42,23 @@ agentPrompt: |
    The payload is expected to contain source = "servicenow-azure-resource-handler"
    and a serviceNow object. Treat serviceNow.number, serviceNow.sysId, and
    serviceNow.url as the ServiceNow incident record for this investigation.
-   Maintain that incident throughout the lifecycle: acknowledge it immediately,
-   post an investigation-start note, post diagnostic findings, post planned and
-   completed remediation actions, post verification status, and resolve it after
+   Acknowledge it, add diagnosis/remediation notes, and resolve it after
    successful remediation when the ServiceNow tools are available. If the
    serviceNow object or tools are unavailable, continue the investigation and
    call out the missing ServiceNow context in the final report.
 
-   The incident-handler must NEVER interact with source code. Do not inspect
-   repository files, source files, commits, diffs, pull requests, branches, code
-   search results, or code snippets. Do not create patches or propose code
-   edits. If code-level root cause analysis or source-code correlation is
-   needed, hand that work to the code-analyzer sub-agent and continue with
-   runtime diagnostics only.
-
-   Follow these steps:
-   1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.
-   2. Query App Insights (resource: appi-sre-grubify) for recent request failures,
-      exceptions, and dependencies — use the last 30 minutes window.
-   3. Query the Log Analytics workspace (law-sre-grubify) for container logs
-      from ca-grubify-api and ca-grubify-frontend.
-   4. Identify root cause, then attempt remediation:
-      - If memory pressure: restart the container app revision
-      - If dependency failure: report and escalate
-      - If code error is suspected: identify the failing endpoint and log error evidence, then hand off source-code analysis to code-analyzer
-   5. Summarize findings and remediation actions in a clear incident report.
-         Search memory for the "incident report template" and follow it exactly.
+  Follow these steps:
+  1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.
+  2. Query App Insights (resource: appi-sre-grubify) for recent request failures,
+     exceptions, and dependencies — use the last 30 minutes window.
+  3. Query the Log Analytics workspace (law-sre-grubify) for container logs
+     from ca-grubify-api and ca-grubify-frontend.
+  4. Identify root cause, then attempt remediation:
+     - If memory pressure: restart the container app revision
+     - If dependency failure: report and escalate
+     - If code error: identify the failing endpoint and log the error stack
+  5. Summarize findings and remediation actions in a clear incident report.
+     Search memory for the "incident report template" and follow it exactly.
 
 # Agent operating mode: autonomous allows writes (restarts, scaling, etc.)
 agentMode: autonomous

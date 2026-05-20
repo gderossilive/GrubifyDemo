@@ -213,8 +213,9 @@ So the runtime flow is:
 1. Backend Container App emits HTTP 5xx.
 2. Azure Monitor metric alert fires.
 3. The action group calls the ServiceNow Logic App.
-4. The Logic App opens a ServiceNow incident and forwards the enriched payload to the SRE Agent.
-5. The `grubify-http-errors` response plan routes the incident to `incident-handler`, which updates and resolves the ServiceNow record.
+4. The Logic App opens a ServiceNow incident and acknowledges the Azure Monitor alert with a comment that references the ServiceNow incident number.
+5. The SRE Agent ServiceNow incident platform detects the ServiceNow incident.
+6. The `grubify-http-errors` response plan routes the ServiceNow incident to `incident-handler`, which retrieves the incident details from ServiceNow and updates/resolves the ServiceNow record.
 
 ---
 
