@@ -46,7 +46,7 @@ spec:
     reply to an existing incident thread. Use the following channel details:
       Team (Group) ID : TEAMS_GROUP_ID_PLACEHOLDER
       Channel ID      : TEAMS_CHANNEL_ID_PLACEHOLDER
-    The Teams message should include: incident summary, root cause,
+    The Teams message should include: incident summary, MTTR, root cause,
     key evidence (log excerpts, metric values), chain of events, and remediation taken. If the
     Teams connector or tool is unavailable, continue the investigation and note
     that Teams notification was skipped in the final report.

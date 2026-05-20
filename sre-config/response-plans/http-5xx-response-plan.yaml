@@ -31,6 +31,24 @@ description: >
 #   5. Hand off source-code analysis to code-analyzer when needed
 agent: incident-handler
 
+# Portal response plan filter. These values mirror the SRE Agent portal object
+# at /api/v1/incidentPlayground/filters/grubify-http-errors.
+responsePlanFilter:
+   id: grubify-http-errors
+   name: Grubify HTTP Errors Filter
+   documentType: IncidentFilterServiceNow
+   partitionKey: IncidentFilterServiceNow
+   incidentType: ServiceNow
+   priorities: []
+   titleContains: alert-http-5xx-grubify
+   handlingAgent: incident-handler
+   agentMode: autonomous
+   isEnabled: true
+   maxAutomatedInvestigationAttempts: 3
+   deepInvestigationEnabled: false
+   mergeEnabled: true
+   mergeWindowHours: 3
+
 # The prompt injected into the thread when the trigger fires.
 # The ServiceNow incident router posts an enriched payload with serviceNow
 # metadata and the original Azure Monitor common alert schema.
@@ -57,18 +75,18 @@ agentPrompt: |
    needed, hand that work to the code-analyzer sub-agent and continue with
    runtime diagnostics only.
 
-  Follow these steps:
-  1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.
-  2. Query App Insights (resource: appi-sre-grubify) for recent request failures,
-     exceptions, and dependencies — use the last 30 minutes window.
-  3. Query the Log Analytics workspace (law-sre-grubify) for container logs
-     from ca-grubify-api and ca-grubify-frontend.
-  4. Identify root cause, then attempt remediation:
-     - If memory pressure: restart the container app revision
-     - If dependency failure: report and escalate
-     - If code error is suspected: identify the failing endpoint and log error evidence, then hand off source-code analysis to code-analyzer
-  5. Summarize findings and remediation actions in a clear incident report.
-     Search memory for the "incident report template" and follow it exactly.
+   Follow these steps:
+   1. Search memory for the "http-500-errors" runbook and execute ALL diagnostic steps.
+   2. Query App Insights (resource: appi-sre-grubify) for recent request failures,
+      exceptions, and dependencies — use the last 30 minutes window.
+   3. Query the Log Analytics workspace (law-sre-grubify) for container logs
+      from ca-grubify-api and ca-grubify-frontend.
+   4. Identify root cause, then attempt remediation:
+      - If memory pressure: restart the container app revision
+      - If dependency failure: report and escalate
+      - If code error is suspected: identify the failing endpoint and log error evidence, then hand off source-code analysis to code-analyzer
+   5. Summarize findings and remediation actions in a clear incident report.
+         Search memory for the "incident report template" and follow it exactly.
 
 # Agent operating mode: autonomous allows writes (restarts, scaling, etc.)
 agentMode: autonomous

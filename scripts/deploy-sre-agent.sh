@@ -198,39 +198,30 @@ PY
 upsert_incident_filter() {
   local filter_id="$1"
   local filter_name="$2"
-  local severity="$3"
+  local incident_type="$3"
   local title_contains="$4"
   local handling_agent="$5"
+  local priorities_json="${6:-[]}"
   local http_code
   local filter_body
 
-  filter_body=$(python3 - "$filter_id" "$filter_name" "$severity" "$title_contains" "$handling_agent" <<'PY'
+  filter_body=$(python3 - "$filter_id" "$filter_name" "$incident_type" "$title_contains" "$handling_agent" "$priorities_json" <<'PY'
 import json
 import sys
 
-filter_id, filter_name, severity, title_contains, handling_agent = sys.argv[1:6]
+filter_id, filter_name, incident_type, title_contains, handling_agent, priorities_json = sys.argv[1:7]
+priorities = json.loads(priorities_json)
 body = {
-    "isDeleted": False,
-    "isEnabled": True,
-    "documentType": "IncidentFilterAzMonitor",
-    "partitionKey": "IncidentFilterAzMonitor",
-    "targetResourceType": "",
-    "targetResource": "",
     "id": filter_id,
     "name": filter_name,
-    "impactedService": "",
-    "priority": "",
-    "priorities": [severity],
-    "incidentType": "",
-    "alertId": "",
+  "documentType": "IncidentFilterServiceNow" if incident_type == "ServiceNow" else "IncidentFilterAzMonitor",
+  "partitionKey": "IncidentFilterServiceNow" if incident_type == "ServiceNow" else "IncidentFilterAzMonitor",
+    "priorities": priorities,
+    "incidentType": incident_type,
     "titleContains": title_contains,
-    "titleContainsAll": [],
-    "titleContainsAny": [],
-    "titleNotContains": [],
     "agentMode": "autonomous",
     "handlingAgent": handling_agent,
-    "owningTeamId": "",
-    "owningTeamIds": [],
+    "isEnabled": True,
     "maxAutomatedInvestigationAttempts": 3,
     "deepInvestigationEnabled": False,
     "mergeEnabled": True,
@@ -247,6 +238,25 @@ PY
     --data-binary @-)
 
   if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "202" || "$http_code" == "204" ]]; then
+    if ! python3 - "$filter_id" /tmp/sre_incident_filter.json >/dev/null <<'PY'
+import json
+import sys
+
+expected_id = sys.argv[1]
+response_path = sys.argv[2]
+try:
+    with open(response_path) as response_file:
+        body = json.load(response_file)
+except Exception:
+    sys.exit(1)
+if body.get("id") != expected_id:
+    sys.exit(1)
+PY
+    then
+      echo "  ⚠ Incident filter $filter_id — API did not return the expected JSON filter"
+      echo "    Response: $(head -c 200 /tmp/sre_incident_filter.json)"
+      return
+    fi
     echo "  ✓ Incident filter $filter_id"
   else
     echo "  ⚠ Incident filter $filter_id — HTTP $http_code: $(cat /tmp/sre_incident_filter.json)"
@@ -816,8 +826,7 @@ fi
 echo ""
 echo "▶ Step 10b/12 — Incident response plan filters"
 AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
-upsert_incident_filter "Grubify-Alert" "" "Sev2" "$ALERT_NAME" ""
-upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors" "Sev3" "Grubify HTTP 5xx Errors" "incident-handler"
+upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors Filter" "ServiceNow" "$ALERT_NAME" "incident-handler" "[]"
 
 # -- 11. ServiceNow incident routing ------------------------------------------
 echo ""
