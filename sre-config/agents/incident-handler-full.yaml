@@ -20,14 +20,17 @@ spec:
     Grubify incidents are expected to arrive through the ServiceNow incident
     router. When the trigger payload includes a serviceNow object, treat it as
     the system-of-record incident and include serviceNow.number,
-    serviceNow.sysId, and serviceNow.url in the GitHub issue, Teams message,
-    and final report. Use AcknowledgeServiceNowIncident at the start when the
-    incident number is present. After diagnosis, use PostServiceNowDiscussionEntry
-    to add the root cause, key evidence, GitHub issue link, and remediation
-    actions. If remediation succeeds and impact has cleared, use
-    ResolveServiceNowIncident with a concise closure note. If the serviceNow
-    object or any ServiceNow tool is unavailable, continue the investigation
-    and call out the missing ServiceNow context in your final report.
+      Grubify incidents are expected to arrive from the native ServiceNow incident
+      platform, not from a forwarded HTTP payload. Treat the current ServiceNow
+      incident as the system-of-record record. At the start, use the available
+      ServiceNow incident context to identify the incident number or sys_id, then
+      call GetServiceNowIncident to retrieve all needed incident details including
+      correlation_id, correlation_display, short_description, description,
+      comments, and any Azure alert identifiers. Maintain the ServiceNow incident
+      throughout the lifecycle and resolve it after successful remediation when
+      the ServiceNow tools are available. If any ServiceNow tool is unavailable,
+      continue the investigation and call out the missing ServiceNow context in
+      your final report.
 
     After creating the GitHub issue, also post a concise summary of your
     findings and evidence to the GrubifyOps Microsoft Teams channel using

@@ -58,6 +58,7 @@ SERVICENOW_INSTANCE_URL="${SERVICENOW_INSTANCE_URL:-}"
 SERVICENOW_USERNAME="${SERVICENOW_USERNAME:-}"
 SERVICENOW_PASSWORD="${SERVICENOW_PASSWORD:-}"
 SERVICENOW_ASSIGNMENT_GROUP="${SERVICENOW_ASSIGNMENT_GROUP:-}"
+SERVICENOW_INDEXING_LOOKBACK_DAYS="${SERVICENOW_INDEXING_LOOKBACK_DAYS:-30}"
 SERVICENOW_CATEGORY="${SERVICENOW_CATEGORY:-software}"
 SERVICENOW_LOGIC_APP_NAME="${SERVICENOW_LOGIC_APP_NAME:-la-grubify-servicenow-handler}"
 ENABLE_TEAMS_CONNECTOR="${ENABLE_TEAMS_CONNECTOR:-false}"
@@ -100,14 +101,21 @@ if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
 fi
 
 if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
-  SERVICENOW_CONNECTION_KEY=$(printf '%s:%s' "$SERVICENOW_USERNAME" "$SERVICENOW_PASSWORD" | base64 | tr -d '\n')
+  SERVICENOW_CONNECTION_KEY=$(python3 - "$SERVICENOW_USERNAME" "$SERVICENOW_PASSWORD" <<'PY'
+import json
+import sys
+
+username, password = sys.argv[1:3]
+print(json.dumps({"username": username, "password": password}, separators=(",", ":")))
+PY
+)
 else
   SERVICENOW_CONNECTION_KEY=""
 fi
 
 build_incident_management_config() {
   if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
-    python3 - "$SERVICENOW_INSTANCE_URL" "$SERVICENOW_CONNECTION_KEY" <<'PY'
+  python3 - "$SERVICENOW_INSTANCE_URL" "$SERVICENOW_CONNECTION_KEY" <<'PY'
 import json
 import sys
 
@@ -195,42 +203,87 @@ PY
   fi
 }
 
-upsert_incident_filter() {
-  local filter_id="$1"
-  local filter_name="$2"
-  local severity="$3"
-  local title_contains="$4"
-  local handling_agent="$5"
+wire_action_group_logic_app() {
+  local receiver_name="$1"
+  local logic_app_id="$2"
+  local callback_url="$3"
+  local arm_token
+  local body
   local http_code
-  local filter_body
 
-  filter_body=$(python3 - "$filter_id" "$filter_name" "$severity" "$title_contains" "$handling_agent" <<'PY'
+  arm_token=$(az account get-access-token --query accessToken -o tsv)
+  body=$(python3 - "$receiver_name" "$logic_app_id" "$callback_url" "${NOTIFICATION_EMAIL:-}" <<'PY'
 import json
 import sys
 
-filter_id, filter_name, severity, title_contains, handling_agent = sys.argv[1:6]
+receiver_name, logic_app_id, callback_url, notification_email = sys.argv[1:5]
+properties = {
+    "groupShortName": "sre-grubify",
+    "enabled": True,
+    "logicAppReceivers": [
+        {
+            "name": receiver_name,
+            "resourceId": logic_app_id,
+            "callbackUrl": callback_url,
+            "useCommonAlertSchema": True,
+        }
+    ],
+}
+if notification_email:
+    properties["emailReceivers"] = [
+        {
+            "name": "SRE Notification",
+            "emailAddress": notification_email,
+            "useCommonAlertSchema": True,
+        }
+    ]
+
+print(json.dumps({"location": "global", "properties": properties}))
+PY
+)
+
+  http_code=$(printf '%s' "$body" | curl -s -o /tmp/sre_ag_put.json -w "%{http_code}" \
+    -X PUT \
+    "https://management.azure.com/subscriptions/${SUBSCRIPTION}/resourceGroups/${SRE_RG}/providers/Microsoft.Insights/actionGroups/${ACTION_GROUP_NAME}?api-version=2023-01-01" \
+    -H "Authorization: Bearer $arm_token" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)
+
+  if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+    echo "  ✓ Logic App receiver '$receiver_name' wired to action group $ACTION_GROUP_NAME"
+  else
+    echo "  ⚠ Could not wire Logic App receiver '$receiver_name' (HTTP $http_code)"
+    echo "    Response: $(cat /tmp/sre_ag_put.json)"
+  fi
+}
+
+upsert_incident_filter() {
+  local filter_id="$1"
+  local filter_name="$2"
+  local incident_type="$3"
+  local title_contains="$4"
+  local handling_agent="$5"
+  local priorities_json="${6:-[]}"
+  local http_code
+  local filter_body
+
+  filter_body=$(python3 - "$filter_id" "$filter_name" "$incident_type" "$title_contains" "$handling_agent" "$priorities_json" <<'PY'
+import json
+import sys
+
+filter_id, filter_name, incident_type, title_contains, handling_agent, priorities_json = sys.argv[1:7]
+priorities = json.loads(priorities_json)
 body = {
-    "isDeleted": False,
-    "isEnabled": True,
-    "documentType": "IncidentFilterAzMonitor",
-    "partitionKey": "IncidentFilterAzMonitor",
-    "targetResourceType": "",
-    "targetResource": "",
     "id": filter_id,
     "name": filter_name,
-    "impactedService": "",
-    "priority": "",
-    "priorities": [severity],
-    "incidentType": "",
-    "alertId": "",
+    "documentType": "IncidentFilterServiceNow" if incident_type == "ServiceNow" else "IncidentFilterAzMonitor",
+    "partitionKey": "IncidentFilterServiceNow" if incident_type == "ServiceNow" else "IncidentFilterAzMonitor",
+    "priorities": priorities,
+    "incidentType": incident_type,
     "titleContains": title_contains,
-    "titleContainsAll": [],
-    "titleContainsAny": [],
-    "titleNotContains": [],
     "agentMode": "autonomous",
     "handlingAgent": handling_agent,
-    "owningTeamId": "",
-    "owningTeamIds": [],
+    "isEnabled": True,
     "maxAutomatedInvestigationAttempts": 3,
     "deepInvestigationEnabled": False,
     "mergeEnabled": True,
@@ -247,6 +300,25 @@ PY
     --data-binary @-)
 
   if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "202" || "$http_code" == "204" ]]; then
+    if ! python3 - "$filter_id" /tmp/sre_incident_filter.json >/dev/null <<'PY'
+import json
+import sys
+
+expected_id = sys.argv[1]
+response_path = sys.argv[2]
+try:
+    with open(response_path) as response_file:
+        body = json.load(response_file)
+except Exception:
+    sys.exit(1)
+if body.get("id") != expected_id:
+    sys.exit(1)
+PY
+    then
+      echo "  ⚠ Incident filter $filter_id — API did not return the expected JSON filter"
+      echo "    Response: $(head -c 200 /tmp/sre_incident_filter.json)"
+      return
+    fi
     echo "  ✓ Incident filter $filter_id"
   else
     echo "  ⚠ Incident filter $filter_id — HTTP $http_code: $(cat /tmp/sre_incident_filter.json)"
@@ -337,6 +409,125 @@ for tool in payload:
   fi
 }
 
+url_encode() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import quote
+
+print(quote(sys.argv[1], safe=""))
+PY
+}
+
+resolve_servicenow_assignment_group() {
+  if [[ -n "$SERVICENOW_ASSIGNMENT_GROUP" ]]; then
+    printf '%s' "$SERVICENOW_ASSIGNMENT_GROUP"
+    return
+  fi
+
+  local search_term
+  local encoded_search
+  local groups_json
+  for search_term in "Software" "Service Desk" "Incident Management" "Help Desk"; do
+    encoded_search=$(url_encode "$search_term")
+    groups_json=$(curl -sf "${AGENT_ENDPOINT}/api/v2/incidents/indexing/servicenow/assignment-groups?search=${encoded_search}" \
+      -H "Authorization: Bearer $AZURESRE_TOKEN" \
+      -H "X-ServiceNow-Endpoint: $SERVICENOW_INSTANCE_URL" \
+      -H "X-ServiceNow-Username: $SERVICENOW_USERNAME" \
+      -H "X-ServiceNow-Password: $SERVICENOW_PASSWORD" 2>/dev/null || true)
+    if [[ -n "$groups_json" ]]; then
+      python3 -c '
+import json
+import sys
+
+search_term = sys.argv[1].lower()
+try:
+    groups = json.load(sys.stdin)
+except Exception:
+    groups = []
+if not isinstance(groups, list):
+    groups = []
+exact = next((group for group in groups if str(group.get("name", "")).lower() == search_term), None)
+chosen = exact or (groups[0] if groups else None)
+if chosen:
+    print(chosen.get("sys_id") or chosen.get("name") or "")
+' "$search_term" <<<"$groups_json"
+      return
+    fi
+  done
+}
+
+configure_servicenow_indexing() {
+  if [[ "$SERVICENOW_HANDLER_ENABLED" != "true" ]]; then
+    return
+  fi
+
+  local validation_body
+  local validation_code
+  local validation_result
+  local assignment_group
+  local indexing_body
+  local indexing_code
+
+  validation_body=$(python3 - "$SERVICENOW_INSTANCE_URL" "$SERVICENOW_USERNAME" "$SERVICENOW_PASSWORD" <<'PY'
+import json
+import sys
+
+endpoint, username, password = sys.argv[1:4]
+print(json.dumps({"endpoint": endpoint, "username": username, "password": password}))
+PY
+)
+  validation_code=$(printf '%s' "$validation_body" | curl -s -o /tmp/sre_servicenow_validation.json -w "%{http_code}" \
+    -X POST "${AGENT_ENDPOINT}/api/v1/incidentplatformvalidation/servicenow" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)
+  validation_result=$(python3 - /tmp/sre_servicenow_validation.json <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1]) as response_file:
+        print(json.load(response_file).get("result", ""))
+except Exception:
+    pass
+PY
+)
+  if [[ "$validation_code" != "200" || "$validation_result" != "valid" ]]; then
+    echo "  ⚠ ServiceNow validation failed in SRE backend (HTTP $validation_code, result: ${validation_result:-unknown})"
+    return
+  fi
+  echo "  ✓ ServiceNow credentials validated by SRE backend"
+
+  assignment_group=$(resolve_servicenow_assignment_group)
+  if [[ -z "$assignment_group" ]]; then
+    echo "  ⚠ ServiceNow indexing requires an assignment group; set SERVICENOW_ASSIGNMENT_GROUP and rerun"
+    return
+  fi
+
+  indexing_body=$(python3 - "$assignment_group" "$SERVICENOW_INDEXING_LOOKBACK_DAYS" <<'PY'
+import json
+import sys
+
+assignment_group, lookback_days = sys.argv[1:3]
+print(json.dumps({
+    "providerType": "servicenow",
+    "assignmentGroup": assignment_group,
+    "lookbackDays": int(lookback_days),
+}))
+PY
+)
+  indexing_code=$(printf '%s' "$indexing_body" | curl -s -o /tmp/sre_servicenow_indexing.json -w "%{http_code}" \
+    -X PUT "${AGENT_ENDPOINT}/api/v2/incidents/indexing/servicenow/configuration" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)
+  if [[ "$indexing_code" == "200" || "$indexing_code" == "201" || "$indexing_code" == "202" || "$indexing_code" == "204" ]]; then
+    echo "  ✓ ServiceNow incident indexing configured"
+  else
+    echo "  ⚠ ServiceNow incident indexing configuration failed (HTTP $indexing_code): $(cat /tmp/sre_servicenow_indexing.json)"
+  fi
+}
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Grubify SRE Agent Deployment"
 echo "  Subscription : $SUBSCRIPTION"
@@ -350,7 +541,6 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 az account set --subscription "$SUBSCRIPTION"
 INCIDENT_MANAGEMENT_CONFIG=$(build_incident_management_config)
-INCIDENT_MANAGEMENT_CONFIG_PROPERTIES=$(echo "$INCIDENT_MANAGEMENT_CONFIG" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",\n          ".join(f"\"{key}\": {json.dumps(value)}" for key, value in d.items()))')
 
 # -- 1. Resource group ---------------------------------------------------------
 echo ""
@@ -431,49 +621,62 @@ EXISTING_AGENT_ID=$(az resource show \
 if [[ -n "$EXISTING_AGENT_ID" ]]; then
   echo "  ✓ $AGENT_NAME already exists — reusing it"
 else
+  AGENT_CREATE_BODY=$(python3 - \
+    "$LOCATION" \
+    "$IDENTITY_ID" \
+    "$INCIDENT_MANAGEMENT_CONFIG" \
+    "$APP_RG_ID" \
+    "$APPI_APP_ID" \
+    "$APPI_ID" \
+    "$APPI_CONNECTION_STRING" <<'PY'
+import json
+import sys
+
+location, identity_id, incident_management_config_json, app_rg_id, appi_app_id, appi_id, appi_connection_string = sys.argv[1:8]
+incident_management_config = json.loads(incident_management_config_json)
+body = {
+    "location": location,
+    "identity": {
+        "type": "SystemAssigned, UserAssigned",
+        "userAssignedIdentities": {
+            identity_id: {}
+        }
+    },
+    "properties": {
+        "actionConfiguration": {
+            "accessLevel": "High",
+            "mode": "autonomous",
+            "identity": identity_id,
+        },
+        "incidentManagementConfiguration": incident_management_config,
+        "knowledgeGraphConfiguration": {
+            "identity": identity_id,
+            "managedResources": [app_rg_id],
+        },
+        "logConfiguration": {
+            "applicationInsightsConfiguration": {
+                "appId": appi_app_id,
+                "applicationInsightsResourceId": appi_id,
+                "connectionString": appi_connection_string,
+            }
+        },
+        "upgradeChannel": "Preview",
+        "monthlyAgentUnitLimit": 10000,
+        "experimentalSettings": {
+            "EnableWorkspaceTools": True,
+        },
+    },
+}
+print(json.dumps(body))
+PY
+)
   az resource create \
     --resource-group "$SRE_RG" \
     --resource-type "Microsoft.App/agents" \
     --name "$AGENT_NAME" \
     --location "$LOCATION" \
     --is-full-object \
-    --properties "{
-      \"location\": \"${LOCATION}\",
-      \"identity\": {
-        \"type\": \"SystemAssigned, UserAssigned\",
-        \"userAssignedIdentities\": {
-          \"${IDENTITY_ID}\": {}
-        }
-      },
-          ${INCIDENT_MANAGEMENT_CONFIG_PROPERTIES}
-          \"accessLevel\": \"High\",
-          \"mode\": \"autonomous\",
-          \"identity\": \"${IDENTITY_ID}\"
-        },
-        \"incidentManagementConfiguration\": {
-          \"type\": \"AzMonitor\",
-          \"connectionName\": \"azmonitor\"
-        },
-        \"knowledgeGraphConfiguration\": {
-          \"identity\": \"${IDENTITY_ID}\",
-          \"managedResources\": [
-            \"${APP_RG_ID}\"
-          ]
-        },
-        \"logConfiguration\": {
-          \"applicationInsightsConfiguration\": {
-            \"appId\": \"${APPI_APP_ID}\",
-            \"applicationInsightsResourceId\": \"${APPI_ID}\",
-            \"connectionString\": \"${APPI_CONNECTION_STRING}\"
-          }
-        },
-        \"upgradeChannel\": \"Preview\",
-        \"monthlyAgentUnitLimit\": 10000,
-        \"experimentalSettings\": {
-          \"EnableWorkspaceTools\": true
-        }
-      }
-    }" \
+    --properties "$AGENT_CREATE_BODY" \
     --output none
 fi
 
@@ -484,8 +687,7 @@ CURRENT_INCIDENT_PLATFORM=$(az resource show \
   --api-version "2026-01-01" \
   --query "properties.incidentManagementConfiguration.type" -o tsv 2>/dev/null || true)
 DESIRED_INCIDENT_PLATFORM=$(echo "$INCIDENT_MANAGEMENT_CONFIG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["type"])')
-if [[ "$CURRENT_INCIDENT_PLATFORM" != "$DESIRED_INCIDENT_PLATFORM" ]]; then
-  PATCH_BODY=$(python3 - "$INCIDENT_MANAGEMENT_CONFIG" <<'PY'
+PATCH_BODY=$(python3 - "$INCIDENT_MANAGEMENT_CONFIG" <<'PY'
 import json
 import sys
 
@@ -493,12 +695,13 @@ incident_management_config = json.loads(sys.argv[1])
 print(json.dumps({"properties": {"incidentManagementConfiguration": incident_management_config}}))
 PY
 )
+if [[ "$CURRENT_INCIDENT_PLATFORM" != "$DESIRED_INCIDENT_PLATFORM" || "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
   az rest \
     --method patch \
     --url "https://management.azure.com/subscriptions/${SUBSCRIPTION}/resourceGroups/${SRE_RG}/providers/Microsoft.App/agents/${AGENT_NAME}?api-version=2026-01-01" \
     --body "$PATCH_BODY" \
     --output none
-  echo "  ✓ Incident platform set to $DESIRED_INCIDENT_PLATFORM"
+  echo "  ✓ Incident platform configured as $DESIRED_INCIDENT_PLATFORM"
 else
   echo "  ✓ Incident platform already $DESIRED_INCIDENT_PLATFORM"
 fi
@@ -726,12 +929,14 @@ else
   echo "  ⚠ No sre-config/agents/ directory found — skipping"
 fi
 
-# -- 10. Response plans (HTTP triggers for ServiceNow-backed incidents) --------
+# -- 10. Direct fallback HTTP triggers ----------------------------------------
 echo ""
-echo "▶ Step 10/12 — Alert response plans"
+echo "▶ Step 10/12 — Direct fallback HTTP triggers"
 RP_DIR="${SCRIPT_DIR}/../sre-config/response-plans"
 SRE_TRIGGER_URL=""
-if [[ -d "$RP_DIR" ]]; then
+if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
+  echo "  ℹ ServiceNow incident platform enabled — skipping SRE HTTP trigger creation"
+elif [[ -d "$RP_DIR" ]]; then
   AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
   for rp_file in "${RP_DIR}"/*.yaml; do
     rp_name=$(basename "$rp_file" .yaml)
@@ -816,19 +1021,17 @@ fi
 echo ""
 echo "▶ Step 10b/12 — Incident response plan filters"
 AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
-upsert_incident_filter "Grubify-Alert" "" "Sev2" "$ALERT_NAME" ""
-upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors" "Sev3" "Grubify HTTP 5xx Errors" "incident-handler"
+configure_servicenow_indexing
+upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors Filter" "ServiceNow" "$ALERT_NAME" "incident-handler" "[]"
 
 # -- 11. ServiceNow incident routing ------------------------------------------
 echo ""
 echo "▶ Step 11/12 — ServiceNow incident routing"
-if [[ -z "${SRE_TRIGGER_URL:-}" && -f "${SCRIPT_DIR}/../.azure/sre-trigger-url" ]]; then
+if [[ -z "${SRE_TRIGGER_URL:-}" && "$SERVICENOW_HANDLER_ENABLED" != "true" && -f "${SCRIPT_DIR}/../.azure/sre-trigger-url" ]]; then
   SRE_TRIGGER_URL=$(<"${SCRIPT_DIR}/../.azure/sre-trigger-url")
 fi
 
-if [[ -z "${SRE_TRIGGER_URL:-}" ]]; then
-  echo "  ⚠ SRE trigger URL unavailable — action group webhook was not changed"
-elif [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
+if [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
   SERVICENOW_TEMPLATE="${SCRIPT_DIR}/../infra/servicenow-logic-app.bicep"
   if [[ ! -f "$SERVICENOW_TEMPLATE" ]]; then
     echo "  ✗ Missing $SERVICENOW_TEMPLATE — cannot configure ServiceNow incident routing" >&2
@@ -848,19 +1051,36 @@ elif [[ "$SERVICENOW_HANDLER_ENABLED" == "true" ]]; then
           serviceNowPassword="$SERVICENOW_PASSWORD" \
           serviceNowAssignmentGroup="$SERVICENOW_ASSIGNMENT_GROUP" \
           serviceNowCategory="$SERVICENOW_CATEGORY" \
-          sreTriggerUrl="$SRE_TRIGGER_URL" \
+          azureSubscriptionId="$SUBSCRIPTION" \
       --query properties.outputs \
       --output json)
 
     SERVICENOW_CALLBACK_URL=$(echo "$deploy_output" | python3 -c "import json,sys; print(json.load(sys.stdin)['callbackUrl']['value'])")
+    SERVICENOW_LOGIC_APP_ID=$(echo "$deploy_output" | python3 -c "import json,sys; print(json.load(sys.stdin)['logicAppId']['value'])")
+    SERVICENOW_LOGIC_APP_PRINCIPAL_ID=$(echo "$deploy_output" | python3 -c "import json,sys; print(json.load(sys.stdin)['logicAppPrincipalId']['value'])")
+    if [[ -n "${SERVICENOW_LOGIC_APP_PRINCIPAL_ID:-}" ]]; then
+      az role assignment create \
+        --assignee-object-id "$SERVICENOW_LOGIC_APP_PRINCIPAL_ID" \
+        --assignee-principal-type ServicePrincipal \
+        --role "Monitoring Contributor" \
+        --scope "/subscriptions/${SUBSCRIPTION}" \
+        --output none 2>/dev/null || true
+      echo "  ✓ Logic App can acknowledge Azure Monitor alerts"
+    else
+      echo "  ⚠ Could not determine Logic App principal ID — assign Monitoring Contributor manually"
+    fi
     mkdir -p "${SCRIPT_DIR}/../.azure"
     echo "$SERVICENOW_CALLBACK_URL" > "${SCRIPT_DIR}/../.azure/servicenow-handler-url"
     echo "  ✓ $SERVICENOW_LOGIC_APP_NAME deployed"
-    wire_action_group_webhook "servicenow-azure-resource-handler" "$SERVICENOW_CALLBACK_URL"
+    wire_action_group_logic_app "sre-logic-app" "$SERVICENOW_LOGIC_APP_ID" "$SERVICENOW_CALLBACK_URL"
   fi
 else
   echo "  ℹ ServiceNow incident routing disabled — using direct SRE Agent webhook fallback"
-  wire_action_group_webhook "sre-incident-handler" "$SRE_TRIGGER_URL"
+  if [[ -z "${SRE_TRIGGER_URL:-}" ]]; then
+    echo "  ⚠ SRE trigger URL unavailable — action group webhook was not changed"
+  else
+    wire_action_group_webhook "sre-incident-handler" "$SRE_TRIGGER_URL"
+  fi
 fi
 
 # -- 12. Summary ---------------------------------------------------------------
