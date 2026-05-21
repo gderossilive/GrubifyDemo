@@ -110,14 +110,25 @@ This creates:
 - **HTTP 5xx Alert**: `alert-http-5xx-grubify`
 - **ServiceNow Logic App URL**: saved locally in `.azure/servicenow-handler-url`
 - **ServiceNow incident platform**: configured on the SRE Agent with native ServiceNow tools
-- **ServiceNow response filter**: `grubify-http-errors`, routed to `incident-handler`
+- **AGT Governance Function URL**: emitted by azd as `AGT_FUNCTION_URL`
+- **ServiceNow response filter**: `grubify-http-errors`, routed to `incident-handler-agt`
 
 The deployment uploads all Markdown files in `knowledge/` and checks whether
 they are indexed by SRE Agent memory. It also deploys a fixed sub-agent
-allow-list: `code-analyzer`, `issue-triager`, and `incident-handler-core`.
-`incident-handler-full.yaml` is kept in the repo as a reserved/manual variant
-and is intentionally skipped because it shares the same `spec.name` as the core
-handler.
+allow-list: `code-analyzer`, `issue-triager`, `incident-handler-core`, and
+`incident-handler-agt`. The governed `incident-handler-agt` is the default
+ServiceNow response-plan target; `incident-handler-core.yaml` remains available
+as an ungoverned fallback. `incident-handler-full.yaml` is kept in the repo as
+a reserved/manual variant and is intentionally skipped because it shares the
+same `spec.name` as the core handler.
+
+The AGT governance Function App is deployed by azd as the `governance` service.
+Verify it before deploying SRE content:
+
+```bash
+curl "$AGT_FUNCTION_URL/api/ready"
+curl "$AGT_FUNCTION_URL/api/health"
+```
 
 ### 5. ServiceNow Incident Routing
 
@@ -126,7 +137,7 @@ deployment follows a native ServiceNow system-of-record pattern:
 
 ```text
 Azure Monitor alert -> Action Group Logic App receiver -> ServiceNow incident
-	-> SRE Agent ServiceNow incident platform -> incident-handler
+	-> SRE Agent ServiceNow incident platform -> incident-handler-agt
 ```
 
 ServiceNow routing is enabled by default. Add these settings to `.env` before
@@ -157,9 +168,10 @@ ServiceNow incident indexing configuration at the SRE API. Incident indexing
 requires an assignment group; if `SERVICENOW_ASSIGNMENT_GROUP` is empty, the
 script tries common ServiceNow groups such as `Software`, `Service Desk`,
 `Incident Management`, and `Help Desk`. The `grubify-http-errors` response
-filter then routes matching ServiceNow incidents to `incident-handler`, which
-retrieves details with `GetServiceNowIncident` and updates the ServiceNow record
-throughout the lifecycle.
+filter then routes matching ServiceNow incidents to `incident-handler-agt`,
+which retrieves details with `GetServiceNowIncident`, has each tool call checked
+by AGT governance hooks, and updates the ServiceNow record throughout the
+lifecycle.
 
 Set `ENABLE_SERVICENOW_HANDLER=false` only when you intentionally want the
 direct Azure Monitor -> SRE Agent webhook fallback for local testing.

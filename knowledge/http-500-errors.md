@@ -266,7 +266,7 @@ If GitHub PAT was configured during post-provisioning, the agent may have:
 
 - GitHub MCP connector: `github-mcp`
 - Repository target: `${GITHUB_USER}/GrubifyDemo` by default, or `GITHUB_REPO` when set
-- GitHub-aware subagents: `incident-handler`, `code-analyzer`, `issue-triager`
+- GitHub-aware subagents: `incident-handler-agt`, `code-analyzer`, `issue-triager`
 
 In that case, create or update a GitHub issue against the remote repository with:
 

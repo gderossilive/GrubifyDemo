@@ -14,14 +14,14 @@ Azure Monitor remains the metric signal source for HTTP 5xx detection, but Servi
 4. The Logic App creates a ServiceNow incident through the Table API.
 5. The Logic App acknowledges the Azure Monitor alert with a comment that references the ServiceNow incident number.
 6. The SRE Agent ServiceNow incident platform indexes the ServiceNow incident.
-7. The `grubify-http-errors` response filter routes the incident to `incident-handler`.
-8. The `incident-handler` sub-agent retrieves details from ServiceNow, diagnoses the alert, remediates the application, and updates ServiceNow when ServiceNow tools are available.
+7. The `grubify-http-errors` response filter routes the incident to `incident-handler-agt`.
+8. The `incident-handler-agt` sub-agent retrieves details from ServiceNow, has tool calls evaluated by AGT governance hooks, diagnoses the alert, remediates the application, and updates ServiceNow when ServiceNow tools are available.
 
 ## No Enriched Forwarding Payload
 
 The Logic App does not post an enriched HTTP payload to the SRE Agent in the normal ServiceNow path. The SRE Agent should not expect `serviceNow.number`, `serviceNow.sysId`, or Azure alert details in an HTTP trigger body.
 
-Instead, the SRE Agent receives the incident through native ServiceNow incident management. The `incident-handler` should use the current ServiceNow incident context to identify the incident number or sys_id, then call `GetServiceNowIncident` to retrieve:
+Instead, the SRE Agent receives the incident through native ServiceNow incident management. The `incident-handler-agt` should use the current ServiceNow incident context to identify the incident number or sys_id, then call `GetServiceNowIncident` to retrieve:
 
 - `short_description`
 - `description`

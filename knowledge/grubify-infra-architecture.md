@@ -206,7 +206,7 @@ The deployment creates a response plan filter:
 
 - Filter ID: `grubify-http-errors`
 - Incident type: `ServiceNow`
-- Handling agent: `incident-handler`
+- Handling agent: `incident-handler-agt`
 - Mode: `autonomous`
 
 So the runtime flow is:
@@ -216,7 +216,7 @@ So the runtime flow is:
 3. The action group calls the ServiceNow Logic App.
 4. The Logic App opens a ServiceNow incident and acknowledges the Azure Monitor alert with a comment that references the ServiceNow incident number.
 5. The SRE Agent ServiceNow incident platform detects the ServiceNow incident.
-6. The `grubify-http-errors` response plan routes the ServiceNow incident to `incident-handler`, which retrieves the incident details from ServiceNow and updates/resolves the ServiceNow record.
+6. The `grubify-http-errors` response plan routes the ServiceNow incident to `incident-handler-agt`, which retrieves the incident details from ServiceNow, evaluates tool calls through AGT governance hooks, and updates/resolves the ServiceNow record.
 
 ServiceNow incident indexing requires an assignment group. `SERVICENOW_ASSIGNMENT_GROUP` can provide one explicitly; otherwise the deploy script tries common ServiceNow groups such as `Software`, `Service Desk`, `Incident Management`, and `Help Desk`. Azure Monitor does not replay notifications that fired while the action group had no valid receiver, so action-group wiring must be correct before the next alert transition.
 
@@ -237,12 +237,14 @@ The post-provision script uploads all Markdown files in `knowledge/` into Agent 
 The deployment always applies these custom agents:
 
 - `incident-handler-core.yaml` as `incident-handler`
+- `incident-handler-agt.yaml` as `incident-handler-agt` for the governed default ServiceNow response path
 - `code-analyzer.yaml`
 - `issue-triager.yaml`
 
+`incident-handler-core.yaml` remains available as an ungoverned fallback.
 `incident-handler-full.yaml` is kept as a manual/reserved variant and is intentionally skipped in normal deployment because it shares the same `spec.name` as the core handler.
 
-Core tools used by `incident-handler`:
+Core tools used by `incident-handler-agt`:
 
 - `SearchMemory`
 - `RunAzCliReadCommands`
@@ -399,7 +401,7 @@ The architecture is intentionally simple:
 - one Application Insights instance for agent telemetry
 - one SRE Agent with autonomous ServiceNow-backed incident handling
 - one HTTP 5xx alert that routes through a Logic App into ServiceNow
-- one ServiceNow response filter that routes matching incidents to `incident-handler`
+- one ServiceNow response filter that routes matching incidents to `incident-handler-agt`
 
 That is the implementation agents should reason from when diagnosing Grubify incidents in this lab.
 

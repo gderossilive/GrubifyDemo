@@ -1,0 +1,46 @@
+name: grubify-sre-agent-policy-agt
+version: "1.0"
+description: Governance policy for Grubify SRE Agent incident-handler-agt hook events.
+defaults:
+  action: allow
+rules:
+  - name: block-source-code-access-tools
+    action: deny
+    priority: 100
+    message: Runtime incident handler must not use source-code or GitHub tools; hand off code analysis to code-analyzer.
+    condition:
+      field: tool_name
+      operator: in
+      value:
+        - github-mcp
+        - github
+        - code_search
+        - read_file
+        - edit_file
+        - apply_patch
+        - git
+  - name: block-shell-execution
+    action: deny
+    priority: 90
+    message: Shell execution is not allowed for this governed incident handler.
+    condition:
+      field: tool_name
+      operator: in
+      value:
+        - RunShellCommand
+        - execute_code
+        - shell_exec
+        - delete_file
+  - name: require-final-evidence
+    action: deny
+    priority: 80
+    message: Final incident summary must include incident summary, root cause, evidence, and remediation.
+    hook_type: stop_quality
+    condition:
+      field: output_text
+      operator: missing_any
+      value:
+        - incident
+        - root cause
+        - evidence
+        - remediation

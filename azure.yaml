@@ -17,6 +17,11 @@ services:
     docker:
       remoteBuild: true
 
+  governance:
+    project: ./sre-config/governance/function_app
+    language: py
+    host: function
+
 hooks:
   postdeploy:
     shell: pwsh
@@ -24,3 +29,4 @@ hooks:
       echo "🍕 Grubify Food Delivery App deployed successfully!"
       echo "Frontend URL: $env:FRONTEND_URL"
       echo "API URL: $env:API_BASE_URL"
+      echo "AGT Governance URL: $env:AGT_FUNCTION_URL"
