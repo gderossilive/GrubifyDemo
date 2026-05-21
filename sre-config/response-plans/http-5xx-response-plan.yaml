@@ -1,7 +1,7 @@
 # Response Plan: Grubify HTTP 5xx Alerts
 #
 # This configures the ServiceNow response plan filter that routes Grubify HTTP
-# 5xx ServiceNow incidents to the incident-handler sub-agent. Azure Monitor
+# 5xx ServiceNow incidents to the AGT-governed incident-handler-agt sub-agent. Azure Monitor
 # remains the metric signal source; ServiceNow is the incident system of record.
 #
 # Deployment:
@@ -11,26 +11,26 @@
 #     Agent. The SRE Agent retrieves incident details from ServiceNow.
 #
 # Default path:
-# Azure Monitor Alert -> Action Group (webhook) -> Logic App ServiceNow handler
+# Azure Monitor Alert -> Action Group (Logic App receiver) -> Logic App ServiceNow handler
 #   -> ServiceNow incident -> native SRE Agent ServiceNow incident platform
-#   -> incident-handler
+#   -> incident-handler-agt
 #
 # Direct fallback path, only when ENABLE_SERVICENOW_HANDLER=false:
 # Azure Monitor Alert -> Action Group (webhook) -> SRE Agent HTTP Trigger
 
 name: grubify-http-5xx-response-plan
 description: >
-  Automatically triggers the incident-handler agent to investigate and mitigate
-  HTTP 5xx errors in the Grubify Container Apps (frontend + API).
+   Automatically triggers the AGT-governed incident-handler-agt agent to investigate and mitigate
+   HTTP 5xx errors in the Grubify Container Apps (frontend + API).
 
 # Which sub-agent handles incidents fired by this trigger.
-# incident-handler will:
+# incident-handler-agt will:
 #   1. Search knowledge base for the http-500-errors runbook
 #   2. Query App Insights and Log Analytics for error context
 #   3. Attempt remediation (scale out, restart, config changes)
 #   4. Update ServiceNow throughout the lifecycle
 #   5. Hand off source-code analysis to code-analyzer when needed
-agent: incident-handler
+agent: incident-handler-agt
 
 responsePlanFilter:
    id: grubify-http-errors
@@ -40,7 +40,7 @@ responsePlanFilter:
    incidentType: ServiceNow
    priorities: []
    titleContains: alert-http-5xx-grubify
-   handlingAgent: incident-handler
+   handlingAgent: incident-handler-agt
    agentMode: autonomous
    isEnabled: true
    maxAutomatedInvestigationAttempts: 3

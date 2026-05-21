@@ -4,7 +4,7 @@ description: >
   Run the Grubify Issue Triage demo (Act 3: Workflow Automation). Seeds sample customer issues
   in a GitHub repo and verifies the SRE Agent's issue-triager subagent can classify, label, and
   comment on them. USE FOR: triage grubify issues, create sample issues, run issue triage demo,
-  verify issue-triager subagent, Demo6. DO NOT USE FOR: incident remediation (use break-app),
+  verify issue-triager subagent, Demo6. DO NOT USE FOR: incident remediation (use grubify-incident),
   deploying grubify (use azd up).
 ---
 
@@ -16,10 +16,10 @@ comment on each one.
 
 ## Working directory
 
-Always run commands from the GrubifyIncidentLab demo directory:
+Run commands from this repository root:
 
 ```bash
-cd /workspaces/AzSreAgentLab/demos/GrubifyIncidentLab
+cd /workspaces/GrubifyDemo
 ```
 
 ## Step 1: Verify prerequisites
@@ -36,8 +36,8 @@ Both must return values. The PAT needs `repo` scope.
 ### 1b) Verify the issue-triager subagent exists on the SRE Agent
 
 ```bash
-AGENT_ENDPOINT=$(azd env get-value SRE_AGENT_ENDPOINT 2>/dev/null)
-TOKEN=$(az account get-access-token --resource https://azuresre.dev --query accessToken -o tsv)
+AGENT_ENDPOINT=<sre-agent-endpoint>
+TOKEN=$(az account get-access-token --resource https://azuresre.ai --query accessToken -o tsv)
 curl -s "${AGENT_ENDPOINT}/api/v2/extendedAgent/agents/issue-triager" \
   -H "Authorization: Bearer ${TOKEN}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Name: {d[\"name\"]}')"
 ```
@@ -62,11 +62,23 @@ Look for `triage-grubify-issues` (cron `0 */12 * * *` → `issue-triager`).
 The user must provide the target GitHub repo in `owner/repo` format. If not provided, ask for it.
 
 ```bash
-export GITHUB_PAT=$(azd env get-value GITHUB_PAT 2>/dev/null)
-./scripts/create-sample-issues.sh <owner/repo>
+export GITHUB_PAT=<github-pat>
+repo=<owner/repo>
+for title in \
+  "App crashes when adding items to cart" \
+  "Menu page loading slowly" \
+  "Can't place an order - 500 error" \
+  "Feature request - add restaurant search" \
+  "How do I clear my cart?"; do
+  curl -s -X POST "https://api.github.com/repos/${repo}/issues" \
+    -H "Authorization: Bearer ${GITHUB_PAT}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    -d "$(printf '{"title":"[Customer Issue] %s","body":"Sample customer issue for Grubify SRE triage demo."}' "$title")"
+done
 ```
 
-This creates 5 realistic customer-reported issues prefixed with `[Customer Issue]`:
+This creates 5 customer-reported issues prefixed with `[Customer Issue]`:
 
 | # | Title | Expected classification |
 |---|-------|------------------------|

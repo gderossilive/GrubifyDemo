@@ -67,6 +67,15 @@ TEAMS_GROUP_ID="${TEAMS_GROUP_ID:-231764ec-b797-41aa-988e-5a9a4c3bd49d}"
 TEAMS_CHANNEL_ID="${TEAMS_CHANNEL_ID:-19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2}"
 TEAMS_CLIENT_ID="${TEAMS_CLIENT_ID:-}"
 TEAMS_CLIENT_SECRET="${TEAMS_CLIENT_SECRET:-}"
+AGT_FUNCTION_URL="${AGT_FUNCTION_URL:-}"
+AGT_AUTH_MODE="${AGT_AUTH_MODE:-none}"
+AGT_CLIENT_ID="${AGT_CLIENT_ID:-}"
+AGT_FUNCTION_KEY="${AGT_FUNCTION_KEY:-}"
+INCIDENT_HANDLER_AGENT="${INCIDENT_HANDLER_AGENT:-incident-handler-agt}"
+
+if [[ -z "$AGT_FUNCTION_URL" ]] && command -v azd >/dev/null 2>&1; then
+  AGT_FUNCTION_URL=$(azd env get-value AGT_FUNCTION_URL 2>/dev/null || true)
+fi
 
 if [[ -z "$SERVICENOW_INSTANCE_URL" && -n "$SERVICENOW_INSTANCE" ]]; then
   if [[ "$SERVICENOW_INSTANCE" == http://* || "$SERVICENOW_INSTANCE" == https://* ]]; then
@@ -141,13 +150,72 @@ PY
 
 render_sre_config() {
   local config_file="$1"
-  sed \
-    -e "s|GITHUB_REPO_PLACEHOLDER|${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}|g" \
-    -e "s|TEAMS_TENANT_ID_PLACEHOLDER|${TEAMS_TENANT_ID}|g" \
-    -e "s|TEAMS_GROUP_ID_PLACEHOLDER|${TEAMS_GROUP_ID}|g" \
-    -e "s|TEAMS_CHANNEL_ID_PLACEHOLDER|${TEAMS_CHANNEL_ID}|g" \
-    -e "s|AZURESRE_AGENT_ENDPOINT_PLACEHOLDER|${AGENT_ENDPOINT:-}|g" \
-    "$config_file"
+  python3 - "$config_file" \
+  "${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}" \
+  "$TEAMS_TENANT_ID" \
+  "$TEAMS_GROUP_ID" \
+  "$TEAMS_CHANNEL_ID" \
+  "${AGENT_ENDPOINT:-}" \
+  "$AGT_FUNCTION_URL" \
+  "$AGT_AUTH_MODE" \
+  "$AGT_CLIENT_ID" \
+  "$AGT_FUNCTION_KEY" <<'PY'
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1]).resolve()
+repo, tenant_id, group_id, channel_id, agent_endpoint = sys.argv[2:7]
+agt_url, agt_auth_mode, agt_client_id, agt_function_key = sys.argv[7:11]
+
+raw = config_path.read_text(encoding="utf-8")
+for old, new in {
+  "GITHUB_REPO_PLACEHOLDER": repo,
+  "TEAMS_TENANT_ID_PLACEHOLDER": tenant_id,
+  "TEAMS_GROUP_ID_PLACEHOLDER": group_id,
+  "TEAMS_CHANNEL_ID_PLACEHOLDER": channel_id,
+  "AZURESRE_AGENT_ENDPOINT_PLACEHOLDER": agent_endpoint,
+}.items():
+  raw = raw.replace(old, new)
+
+if "script_file:" not in raw:
+  print(raw, end="")
+  sys.exit(0)
+
+try:
+  import yaml
+except ImportError:
+  print(f"PyYAML is required to render hooks in {config_path}", file=sys.stderr)
+  sys.exit(2)
+
+data = yaml.safe_load(raw)
+spec = data.get("spec", data)
+hooks = spec.get("hooks") or {}
+placeholders = {
+  "##AGT_FUNCTION_URL##": agt_url,
+  "##AGT_AUTH_MODE##": agt_auth_mode,
+  "##AGT_CLIENT_ID##": agt_client_id,
+  "##AGT_FUNCTION_KEY##": agt_function_key,
+}
+
+for event_name, hook_list in hooks.items():
+  if not isinstance(hook_list, list):
+    raise ValueError(f"hooks.{event_name} in {config_path.name} must be a list")
+  for hook in hook_list:
+    if not isinstance(hook, dict):
+      raise ValueError(f"hooks.{event_name} entries in {config_path.name} must be objects")
+    script_file = hook.pop("script_file", None)
+    hook_type = hook.pop("hook_type", hook.pop("hookType", event_name))
+    if not script_file:
+      continue
+    script_path = (config_path.parent / script_file).resolve()
+    script = script_path.read_text(encoding="utf-8")
+    values = {**placeholders, "##AGT_HOOK_TYPE##": str(hook_type)}
+    for old, new in values.items():
+      script = script.replace(old, new)
+    hook["script"] = script
+
+print(yaml.safe_dump(data, sort_keys=False), end="")
+PY
 }
 
 wire_action_group_webhook() {
@@ -537,6 +605,7 @@ echo "  Agent RG     : $SRE_RG"
 echo "  App RG       : $APP_RG"
 echo "  ServiceNow   : $SERVICENOW_HANDLER_ENABLED"
 echo "  Teams        : $TEAMS_CONNECTOR_ENABLED"
+echo "  Governance   : ${AGT_FUNCTION_URL:-<not configured>}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 az account set --subscription "$SUBSCRIPTION"
@@ -900,7 +969,7 @@ verify_teams_connector
 echo ""
 echo "▶ Step 9/12 — Custom sub-agents (Agent Canvas)"
 AGENTS_DIR="${SCRIPT_DIR}/../sre-config/agents"
-AGENTS_TO_DEPLOY=("code-analyzer" "issue-triager" "incident-handler-core")
+AGENTS_TO_DEPLOY=("code-analyzer" "issue-triager" "incident-handler-core" "incident-handler-agt")
 if [[ -d "$AGENTS_DIR" ]]; then
   AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
   APPLY_ENDPOINT="${AGENT_ENDPOINT}/api/v1/extendedAgent/apply"
@@ -1022,7 +1091,7 @@ echo ""
 echo "▶ Step 10b/12 — Incident response plan filters"
 AZURESRE_TOKEN=$(az account get-access-token --resource "https://azuresre.ai" --query accessToken -o tsv 2>/dev/null)
 configure_servicenow_indexing
-upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors Filter" "ServiceNow" "$ALERT_NAME" "incident-handler" "[]"
+upsert_incident_filter "grubify-http-errors" "Grubify HTTP Errors Filter" "ServiceNow" "$ALERT_NAME" "$INCIDENT_HANDLER_AGENT" "[]"
 
 # -- 11. ServiceNow incident routing ------------------------------------------
 echo ""
@@ -1093,6 +1162,8 @@ echo "  Resource group : $SRE_RG"
 echo "  Endpoint       : ${AGENT_ENDPOINT:-<provisioning>}"
 echo "  ServiceNow     : $SERVICENOW_HANDLER_ENABLED"
 echo "  Teams          : $TEAMS_CONNECTOR_ENABLED"
+echo "  Governance     : ${AGT_FUNCTION_URL:-<not configured>}"
+echo "  Incident agent : $INCIDENT_HANDLER_AGENT"
 echo "  Portal         : https://sre.azure.com"
 echo ""
 echo "  Next steps:"
@@ -1100,5 +1171,5 @@ echo "  1. Open https://sre.azure.com and verify the agent is running"
 echo "  2. Authorize the GitHub repo (${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}) via the Code card in the portal"
 echo "  3. Verify ServiceNow incidents are created for Grubify HTTP 5xx signals"
 echo "  4. If Teams is enabled, verify/register the Teams connector in the portal"
-echo "  5. Run ./scripts/break-app.sh to trigger an incident demo"
+echo "  5. Trigger the incident demo with repeated POST requests to /api/cart/demo-user/items"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

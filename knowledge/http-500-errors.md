@@ -4,17 +4,17 @@
 `500 error`, `internal server error`, `HTTP 500`, `server error`, `application error`, `memory leak`, `OOM`, `cart API`
 
 ## Scope
-This runbook is for the actual Grubify Incident Lab in `demos/GrubifyIncidentLab`.
+This runbook is for the actual Grubify Incident Lab in this repository.
 
 Use it when the backend Azure Container App deployed by this lab starts returning HTTP 5xx and a ServiceNow-backed incident reaches the SRE Agent. Azure Monitor supplies the metric signal; ServiceNow owns the incident record.
 
 This runbook is tied to:
 
-- Azure deployment: `demos/GrubifyIncidentLab/azure.yaml`
-- Infrastructure: `demos/GrubifyIncidentLab/infrastructure/`
-- Post-provision automation: `demos/GrubifyIncidentLab/scripts/post-provision.sh`
-- Application source: `demos/GrubifyIncidentLab/src/grubify`
-- Upstream GitHub repository: `https://github.com/dm-chelupati/grubify.git`
+- Azure deployment: `azure.yaml`
+- Infrastructure: `infra/`
+- SRE Agent automation: `scripts/deploy-sre-agent.sh`
+- Application source: `GrubifyApi/` and `grubify-frontend/`
+- GitHub repository: `https://github.com/gderossilive/GrubifyDemo.git`
 
 This lab primarily uses:
 
@@ -94,17 +94,15 @@ Use only these metric names with `az monitor metrics list`:
 
 ## Phase 1: Identify The Actual Backend Resource
 
-Resolve the current environment values first. The lab writes them into the azd environment.
+Resolve the current environment values first. The `azd` environment contains app resource names, and the SRE deployment can also be inspected through Azure Resource Manager.
 
 ```bash
-cd demos/GrubifyIncidentLab
+cd /workspaces/GrubifyDemo
 
 azd env get-value AZURE_RESOURCE_GROUP
 azd env get-value CONTAINER_APP_NAME
 azd env get-value CONTAINER_APP_URL
 azd env get-value FRONTEND_APP_NAME
-azd env get-value SRE_AGENT_NAME
-azd env get-value SRE_AGENT_ENDPOINT
 ```
 
 You should expect values shaped like:
@@ -247,8 +245,8 @@ For this lab, source correlation should start with the local vendored repo and, 
 
 ### Local Source Paths
 
-- Backend API: `demos/GrubifyIncidentLab/src/grubify/GrubifyApi`
-- Leak implementation: `demos/GrubifyIncidentLab/src/grubify/GrubifyApi/Controllers/CartController.cs`
+- Backend API: `GrubifyApi/`
+- Leak implementation: `GrubifyApi/Controllers/CartController.cs`
 
 ### Primary Root Cause Candidate
 
@@ -267,8 +265,8 @@ This lab’s main intentional fault satisfies all three.
 If GitHub PAT was configured during post-provisioning, the agent may have:
 
 - GitHub MCP connector: `github-mcp`
-- Repository target: `dm-chelupati/grubify` by default
-- GitHub-aware subagents: `incident-handler`, `code-analyzer`, `issue-triager`
+- Repository target: `${GITHUB_USER}/GrubifyDemo` by default, or `GITHUB_REPO` when set
+- GitHub-aware subagents: `incident-handler-agt`, `code-analyzer`, `issue-triager`
 
 In that case, create or update a GitHub issue against the remote repository with:
 
@@ -357,7 +355,7 @@ exceptions
 | Restart evidence | `RestartCount` increases or system logs show restart/OOM events |
 | Cart leak evidence | Logs show `Analytics cache` or `Cache size` growth |
 | Source correlation | `CartController.AddItemToCart` retains `10 MB` buffers in static memory |
-| GitHub path | If MCP is configured, file/update issue in `dm-chelupati/grubify` |
+| GitHub path | If MCP is configured, file/update issue in the configured `GITHUB_REPO` |
 
 ---
 
@@ -368,7 +366,7 @@ exceptions
 | `POST /api/cart/.../items` fails first | Intentional cart memory leak | Gather memory/log evidence, restart or scale, file code fix |
 | Memory rises steadily, CPU not saturated | Leak, not CPU bottleneck | Prioritize memory evidence and restart history |
 | All endpoints fail after memory growth | Container restart loop or broad resource exhaustion | Inspect `RestartCount`, revision health, system logs |
-| 5xx appears after manual load test | Expected lab trigger from `break-app.sh` | Correlate timeline to cart POST flood |
+| 5xx appears after manual load test | Expected lab trigger from repeated cart POST requests | Correlate timeline to cart POST flood |
 
 ---
 

@@ -4,11 +4,11 @@
 
 This knowledge file describes the actual implementation of the Grubify incident lab in this repository.
 
-- Deployment entry point: `demos/GrubifyIncidentLab/azure.yaml`
-- Infrastructure: `demos/GrubifyIncidentLab/infrastructure/`
-- Post-provision automation: `demos/GrubifyIncidentLab/scripts/post-provision.sh`
-- Application source used by the lab: `demos/GrubifyIncidentLab/src/grubify`
-- Upstream source repository: `https://github.com/dm-chelupati/grubify.git`
+- Deployment entry point: `azure.yaml`
+- Infrastructure: `infra/`
+- SRE Agent automation: `scripts/deploy-sre-agent.sh`
+- Application source used by the lab: `GrubifyApi/` and `grubify-frontend/`
+- Repository: `https://github.com/gderossilive/GrubifyDemo.git`
 
 This lab does not deploy a generic Node.js container. It deploys the vendored Grubify application in this repo:
 
@@ -21,21 +21,21 @@ This lab does not deploy a generic Node.js container. It deploys the vendored Gr
 
 ## Deployment Model
 
-The lab is deployed with `azd up` from `demos/GrubifyIncidentLab`.
+The app is deployed with `azd up` from the repository root.
 
 ### Control Plane
 
-`azure.yaml` provisions only infrastructure through Bicep:
+`azure.yaml` provisions the application and infrastructure through Bicep:
 
 - `infra.provider: bicep`
-- `infra.path: infrastructure`
-- `hooks.postprovision: bash ./scripts/post-provision.sh`
+- `infra.path: infra`
+- service definitions for the React frontend and .NET API
 
-There is intentionally no `services:` block in the lab-level `azure.yaml`. Container images are built remotely with Azure Container Registry Tasks in the post-provision step, so the demo does not require a local Docker daemon.
+Container images are built remotely with Azure Container Registry Tasks, so the demo does not require a local Docker daemon.
 
 ### Azure Resource Topology
 
-`infrastructure/main.bicep` is subscription-scoped and creates a dedicated resource group:
+`infra/main.bicep` is subscription-scoped and creates a dedicated resource group:
 
 - Resource group name pattern: `rg-${environmentName}`
 
@@ -63,7 +63,7 @@ The deployment creates two Container Apps in the same Container Apps environment
 
 ### Backend API Container App
 
-Defined in `infrastructure/modules/container-app.bicep`:
+Defined through the `infra/core/host/container-app.bicep` module:
 
 - Name pattern: `ca-grubify-${uniqueSuffix}`
 - External ingress: `true`
@@ -82,11 +82,11 @@ After image deployment, the post-provision script also sets:
 
 - `AllowedOrigins__0=<frontend-url>`
 
-That matches the backend CORS policy in `src/grubify/GrubifyApi/Program.cs`.
+That matches the backend CORS policy in `GrubifyApi/Program.cs`.
 
 ### Frontend Container App
 
-Also defined in `infrastructure/modules/container-app.bicep`:
+Also defined through the `infra/core/host/container-app.bicep` module:
 
 - Name pattern: `ca-grubify-fe-${uniqueSuffix}`
 - External ingress: `true`
@@ -103,22 +103,22 @@ Frontend runtime configuration is injected through:
 
 ## Build And Release Flow
 
-The lab uses `scripts/post-provision.sh` to turn the freshly provisioned infrastructure into a runnable demo.
+The lab uses Azure Developer CLI service definitions and remote ACR builds to turn the provisioned infrastructure into a runnable demo.
 
 ### Image Build
 
 The script runs remote builds in ACR:
 
-- API image source: `src/grubify/GrubifyApi/Dockerfile`
+- API image source: `GrubifyApi/Dockerfile`
 - API image tag: `grubify-api:latest`
-- Frontend image source: `src/grubify/grubify-frontend/Dockerfile`
+- Frontend image source: `grubify-frontend/Dockerfile`
 - Frontend image tag: `grubify-frontend:latest`
 
 ### Deployment Updates
 
 After the ACR builds finish, the script updates both Container Apps with `az containerapp update`.
 
-This means the actual running demo is built from the vendored repository under `demos/GrubifyIncidentLab/src/grubify`, not from a prebuilt public image.
+This means the actual running demo is built from the source in this repository, not from a prebuilt public image.
 
 ---
 
@@ -133,7 +133,7 @@ This means the actual running demo is built from the vendored repository under `
 | **Traces** | **None.** The Grubify API has no OpenTelemetry SDK, no `Activity` instrumentation, and no App Insights SDK configured. No distributed traces are collected. | N/A | N/A |
 | **Agent telemetry** | SRE Agent internal telemetry (not Grubify app telemetry) | Application Insights (`appi-${uniqueSuffix}`) | `QueryAppInsightsByResourceId` |
 
-See `grubify-ontology.md` (`## Metrics`, `## Traces`, `## Logging Granularity`) for the per-endpoint breakdown of what the application code actually emits.
+See `grubify-app-architecture.md` for the per-endpoint breakdown of the application surface and telemetry expectations.
 
 ### Log Analytics
 
@@ -200,12 +200,13 @@ This is the permission set the agent uses to inspect resources, query telemetry,
 
 ### Incident Platform Wiring
 
-Azure Monitor remains the HTTP 5xx metric signal source, but ServiceNow is the incident system of record. The deployment creates an Azure Monitor metric alert and action group, then routes the action group webhook through the ServiceNow Logic App before the SRE Agent trigger.
+Azure Monitor remains the HTTP 5xx metric signal source, but ServiceNow is the incident system of record. The deployment creates an Azure Monitor metric alert and action group, then routes the action group through a Logic App receiver. The Logic App opens a ServiceNow incident and acknowledges the Azure Monitor alert; the SRE Agent receives the incident later through its native ServiceNow incident platform, not through a forwarded HTTP payload.
 
 The deployment creates a response plan filter:
 
 - Filter ID: `grubify-http-errors`
-- Handling agent: `incident-handler`
+- Incident type: `ServiceNow`
+- Handling agent: `incident-handler-agt`
 - Mode: `autonomous`
 
 So the runtime flow is:
@@ -215,7 +216,9 @@ So the runtime flow is:
 3. The action group calls the ServiceNow Logic App.
 4. The Logic App opens a ServiceNow incident and acknowledges the Azure Monitor alert with a comment that references the ServiceNow incident number.
 5. The SRE Agent ServiceNow incident platform detects the ServiceNow incident.
-6. The `grubify-http-errors` response plan routes the ServiceNow incident to `incident-handler`, which retrieves the incident details from ServiceNow and updates/resolves the ServiceNow record.
+6. The `grubify-http-errors` response plan routes the ServiceNow incident to `incident-handler-agt`, which retrieves the incident details from ServiceNow, evaluates tool calls through AGT governance hooks, and updates/resolves the ServiceNow record.
+
+ServiceNow incident indexing requires an assignment group. `SERVICENOW_ASSIGNMENT_GROUP` can provide one explicitly; otherwise the deploy script tries common ServiceNow groups such as `Software`, `Service Desk`, `Incident Management`, and `Help Desk`. Azure Monitor does not replay notifications that fired while the action group had no valid receiver, so action-group wiring must be correct before the next alert transition.
 
 ---
 
@@ -223,20 +226,25 @@ So the runtime flow is:
 
 The post-provision script uploads all Markdown files in `knowledge/` into Agent Memory. That includes:
 
-- `grubify-architecture.md` — deployment model, resource topology, monitoring wiring (this file)
-- `grubify-ontology.md` — component graph, API→entity relationships, fault injection map, observability gaps
+- `grubify-infra-architecture.md` — deployment model, resource topology, monitoring wiring (this file)
+- `grubify-app-architecture.md` — component graph, API/entity relationships, fault injection map, observability gaps
 - `http-500-errors.md`
 - `incident-report-template.md`
 - `github-issue-triage.md` when GitHub integration is enabled
 
-### Always-Created Subagent
+### Always-Created Subagents
 
-The lab always creates `incident-handler`.
+The deployment always applies these custom agents:
 
-- Without GitHub PAT: `incident-handler-core.yaml`
-- With GitHub PAT: `incident-handler-full.yaml`
+- `incident-handler-core.yaml` as `incident-handler`
+- `incident-handler-agt.yaml` as `incident-handler-agt` for the governed default ServiceNow response path
+- `code-analyzer.yaml`
+- `issue-triager.yaml`
 
-Core tools used by `incident-handler`:
+`incident-handler-core.yaml` remains available as an ungoverned fallback.
+`incident-handler-full.yaml` is kept as a manual/reserved variant and is intentionally skipped in normal deployment because it shares the same `spec.name` as the core handler.
+
+Core tools used by `incident-handler-agt`:
 
 - `SearchMemory`
 - `RunAzCliReadCommands`
@@ -248,25 +256,9 @@ Core tools used by `incident-handler`:
 
 ### Optional GitHub-Enabled Subagents
 
-If `GITHUB_PAT` is present in the azd environment, the post-provision step also:
+If `GITHUB_PAT` is present, the deployment also configures repository access for the SRE Agent. GitHub issue triage still depends on a valid GitHub token/connector and the `issue-triager` agent.
 
-- Creates a GitHub MCP connector named `github-mcp`
-- Creates `code-analyzer`
-- Creates `issue-triager`
-- Creates a scheduled task `triage-grubify-issues` with cron `0 */12 * * *`
-
-The connector uses:
-
-- Endpoint: `https://api.githubcopilot.com/mcp/`
-- Auth type: bearer token from `GITHUB_PAT`
-
-The default target repository is:
-
-- `dm-chelupati/grubify`
-
-If `GITHUB_USER` is set, the script instead targets:
-
-- `${GITHUB_USER}/grubify`
+The default target repository is `${GITHUB_USER}/GrubifyDemo` when `GITHUB_REPO` is not set. Set `GITHUB_REPO` explicitly for forks or alternate demo repositories.
 
 ---
 
@@ -276,27 +268,24 @@ There are two repository contexts in this lab:
 
 ### 1. Local Source Used For Deployment
 
-The app that Azure runs comes from the vendored copy at:
+The app that Azure runs comes from the source in this repository:
 
-- `demos/GrubifyIncidentLab/src/grubify`
-
-That working tree is cloned from:
-
-- `https://github.com/dm-chelupati/grubify.git`
+- `GrubifyApi/`
+- `grubify-frontend/`
 
 ### 2. Remote Repository Used By GitHub MCP
 
-When GitHub integration is enabled, the SRE Agent uses the GitHub MCP connector to inspect and update a GitHub repository. By default, that repository is also:
+When GitHub integration is enabled, the SRE Agent uses the configured GitHub repository to inspect source and create or update issues. By default, that repository is:
 
-- `dm-chelupati/grubify`
+- `${GITHUB_USER}/GrubifyDemo`
 
-That is why the YAML specs use `GITHUB_REPO_PLACEHOLDER` and the post-provision script resolves it before creating GitHub-aware subagents.
+That is why the YAML specs use `GITHUB_REPO_PLACEHOLDER` and the deploy script resolves it before creating GitHub-aware subagents.
 
 ---
 
 ## Application Surface Actually Deployed
 
-The backend routes are implemented by ASP.NET Core controllers under `src/grubify/GrubifyApi/Controllers/`.
+The backend routes are implemented by ASP.NET Core controllers under `GrubifyApi/Controllers/`.
 
 Representative endpoints exposed by the deployed API include:
 
@@ -343,7 +332,7 @@ Under repeated calls to `/api/cart/demo-user/items`, memory grows without cleanu
 
 ### Trigger Mechanism
 
-`scripts/break-app.sh` repeatedly calls:
+The incident demo repeatedly calls:
 
 ```bash
 POST /api/cart/demo-user/items
@@ -401,7 +390,7 @@ ContainerAppConsoleLogs_CL
 
 ## Summary
 
-The Grubify incident lab in this repository is a Bicep + azd + Azure Container Apps deployment of a .NET API and React frontend, with an Azure SRE Agent configured to consume Azure Monitor incidents and optionally integrate with GitHub MCP against `dm-chelupati/grubify`.
+The Grubify incident lab in this repository is a Bicep + azd + Azure Container Apps deployment of a .NET API and React frontend, with an Azure SRE Agent configured to consume ServiceNow incidents created from Azure Monitor HTTP 5xx alerts and optionally integrate with GitHub.
 
 The architecture is intentionally simple:
 
@@ -410,8 +399,9 @@ The architecture is intentionally simple:
 - one frontend Container App
 - one Log Analytics workspace for app logs
 - one Application Insights instance for agent telemetry
-- one SRE Agent with autonomous incident handling
-- one HTTP 5xx alert that routes incidents to the agent
+- one SRE Agent with autonomous ServiceNow-backed incident handling
+- one HTTP 5xx alert that routes through a Logic App into ServiceNow
+- one ServiceNow response filter that routes matching incidents to `incident-handler-agt`
 
 That is the implementation agents should reason from when diagnosing Grubify incidents in this lab.
 
@@ -419,4 +409,4 @@ That is the implementation agents should reason from when diagnosing Grubify inc
 
 ## Related Knowledge
 
-- `grubify-ontology.md` — component dependency graph, entity model, fault injection map, and observability gaps (what the app actually emits vs. what is detectable)
+- `grubify-app-architecture.md` — component dependency graph, entity model, fault injection map, and observability gaps (what the app actually emits vs. what is detectable)

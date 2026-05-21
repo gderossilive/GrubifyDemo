@@ -31,6 +31,9 @@ var tags = { 'azd-env-name': environmentName }
 var useExistingEnv = !empty(existingContainerAppsEnvironmentId)
 var existingEnvRg = useExistingEnv ? split(existingContainerAppsEnvironmentId, '/')[4] : 'placeholder'
 var existingEnvName = useExistingEnv ? last(split(existingContainerAppsEnvironmentId, '/')) : 'placeholder'
+var governanceFunctionName = 'func-agt-grubify-${resourceToken}'
+var governanceStorageName = 'stagtgrubify${resourceToken}'
+var governancePlanName = 'plan-agt-grubify-${resourceToken}'
 
 // Organize resources in a resource group
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
@@ -70,8 +73,8 @@ module existingEnvLookup 'core/host/container-apps-environment-existing.bicep' =
   }
 }
 
-var envId = useExistingEnv ? existingContainerAppsEnvironmentId : containerAppsEnvironment.outputs.id
-var envDefaultDomain = useExistingEnv ? existingEnvLookup.outputs.defaultDomain : containerAppsEnvironment.outputs.defaultDomain
+var envId = useExistingEnv ? existingContainerAppsEnvironmentId : containerAppsEnvironment!.outputs.id
+var envDefaultDomain = useExistingEnv ? existingEnvLookup!.outputs.defaultDomain : containerAppsEnvironment!.outputs.defaultDomain
 
 // Container app for the API
 module api 'core/host/container-app.bicep' = {
@@ -127,6 +130,19 @@ module frontend 'core/host/container-app.bicep' = {
   }
 }
 
+// AGT governance Function App for SRE Agent hook policy evaluation
+module governanceFunction 'core/host/governance-function.bicep' = {
+  name: 'governance-function'
+  scope: rg
+  params: {
+    location: location
+    functionAppName: governanceFunctionName
+    storageAccountName: governanceStorageName
+    planName: governancePlanName
+    tags: union(tags, { 'azd-service-name': 'governance' })
+  }
+}
+
 // App outputs
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
@@ -138,3 +154,7 @@ output AZURE_CONTAINER_REGISTRY_NAME string = containerRegistry.outputs.name
 
 output API_BASE_URL string = 'https://${api.outputs.fqdn}'
 output FRONTEND_URL string = 'https://${frontend.outputs.fqdn}'
+output AGT_FUNCTION_URL string = governanceFunction.outputs.functionAppUrl
+output AGT_FUNCTION_NAME string = governanceFunction.outputs.functionAppName
+output AGT_FUNCTION_PRINCIPAL_ID string = governanceFunction.outputs.functionAppPrincipalId
+output SERVICE_GOVERNANCE_NAME string = governanceFunction.outputs.functionAppName

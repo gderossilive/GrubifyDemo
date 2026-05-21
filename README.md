@@ -79,8 +79,8 @@ This creates:
 The SRE Agent deployment script creates a dedicated SRE resource group,
 Application Insights, a managed identity, Azure Monitor HTTP 5xx alerting,
 ServiceNow incident routing, knowledge uploads, custom sub-agents, and the
-response-plan webhook. Azure Monitor supplies the HTTP 5xx signal; ServiceNow
-is the incident system of record.
+ServiceNow response-plan filter. Azure Monitor supplies the HTTP 5xx signal;
+ServiceNow is the incident system of record and the SRE Agent incident platform.
 
 Create a local `.env` file with your subscription and optional notification
 settings, plus ServiceNow credentials for incident routing:
@@ -93,6 +93,8 @@ SERVICENOW_INSTANCE=<instance>
 # Or set SERVICENOW_INSTANCE_URL=https://<instance>.service-now.com
 SERVICENOW_USERNAME=<servicenow-user>
 SERVICENOW_PASSWORD=<servicenow-password>
+SERVICENOW_ASSIGNMENT_GROUP=<optional-servicenow-group-sys-id-or-name>
+SERVICENOW_INDEXING_LOOKBACK_DAYS=30
 ```
 
 Then run:
@@ -106,24 +108,36 @@ This creates:
 - **SRE Agent**: `sre-agent-grubify`
 - **Action Group**: `ag-sre-grubify`
 - **HTTP 5xx Alert**: `alert-http-5xx-grubify`
-- **SRE Trigger URL**: saved locally in `.azure/sre-trigger-url`
 - **ServiceNow Logic App URL**: saved locally in `.azure/servicenow-handler-url`
+- **ServiceNow incident platform**: configured on the SRE Agent with native ServiceNow tools
+- **AGT Governance Function URL**: emitted by azd as `AGT_FUNCTION_URL`
+- **ServiceNow response filter**: `grubify-http-errors`, routed to `incident-handler-agt`
 
 The deployment uploads all Markdown files in `knowledge/` and checks whether
 they are indexed by SRE Agent memory. It also deploys a fixed sub-agent
-allow-list: `code-analyzer`, `issue-triager`, and `incident-handler-core`.
-`incident-handler-full.yaml` is kept in the repo as a reserved/manual variant
-and is intentionally skipped because it shares the same `spec.name` as the core
-handler.
+allow-list: `code-analyzer`, `issue-triager`, `incident-handler-core`, and
+`incident-handler-agt`. The governed `incident-handler-agt` is the default
+ServiceNow response-plan target; `incident-handler-core.yaml` remains available
+as an ungoverned fallback. `incident-handler-full.yaml` is kept in the repo as
+a reserved/manual variant and is intentionally skipped because it shares the
+same `spec.name` as the core handler.
+
+The AGT governance Function App is deployed by azd as the `governance` service.
+Verify it before deploying SRE content:
+
+```bash
+curl "$AGT_FUNCTION_URL/api/ready"
+curl "$AGT_FUNCTION_URL/api/health"
+```
 
 ### 5. ServiceNow Incident Routing
 
 ServiceNow is the primary incident platform for the Grubify incident demo. The
-deployment follows the ServiceNowAzureResourceHandler pattern from the
-AzSreAgentLab parent demo:
+deployment follows a native ServiceNow system-of-record pattern:
 
 ```text
-Azure Monitor alert -> Logic App -> ServiceNow incident -> SRE Agent
+Azure Monitor alert -> Action Group Logic App receiver -> ServiceNow incident
+	-> SRE Agent ServiceNow incident platform -> incident-handler-agt
 ```
 
 ServiceNow routing is enabled by default. Add these settings to `.env` before
@@ -136,15 +150,28 @@ SERVICENOW_INSTANCE=<instance>
 SERVICENOW_USERNAME=<servicenow-user>
 SERVICENOW_PASSWORD=<servicenow-password>
 SERVICENOW_ASSIGNMENT_GROUP=<optional-assignment-group>
+SERVICENOW_INDEXING_LOOKBACK_DAYS=30
 SERVICENOW_CATEGORY=software
 ```
 
 The script deploys Logic App
 `la-grubify-servicenow-handler` into `rg-grubify-sre`, stores its callback URL
-in `.azure/servicenow-handler-url`, and points `ag-sre-grubify` at the Logic
-App. The Logic App creates the ServiceNow incident first, then forwards the
-original Azure Monitor alert plus `serviceNow.number`, `serviceNow.sysId`, and
-`serviceNow.url` to the SRE Agent trigger.
+in `.azure/servicenow-handler-url`, and wires `ag-sre-grubify` with a Logic App
+receiver named `sre-logic-app`. The Logic App creates the ServiceNow incident,
+then acknowledges the Azure Monitor alert with a comment such as `Routed to
+ServiceNow incident INC0012345.` It does not forward an enriched payload to the
+SRE Agent.
+
+The SRE Agent is configured with native `ServiceNow` incident management. The
+deployment validates the ServiceNow endpoint through the SRE backend and saves
+ServiceNow incident indexing configuration at the SRE API. Incident indexing
+requires an assignment group; if `SERVICENOW_ASSIGNMENT_GROUP` is empty, the
+script tries common ServiceNow groups such as `Software`, `Service Desk`,
+`Incident Management`, and `Help Desk`. The `grubify-http-errors` response
+filter then routes matching ServiceNow incidents to `incident-handler-agt`,
+which retrieves details with `GetServiceNowIncident`, has each tool call checked
+by AGT governance hooks, and updates the ServiceNow record throughout the
+lifecycle.
 
 Set `ENABLE_SERVICENOW_HANDLER=false` only when you intentionally want the
 direct Azure Monitor -> SRE Agent webhook fallback for local testing.
@@ -155,15 +182,19 @@ Verify the ServiceNow route:
 az monitor action-group show \
 	--resource-group rg-grubify-sre \
 	--name ag-sre-grubify \
-	--query "properties.webhookReceivers[].name" \
+	--query "{logicAppReceivers:logicAppReceivers[].{name:name,useCommonAlertSchema:useCommonAlertSchema},webhookCount:length(webhookReceivers)}" \
 	-o table
 
-az logic workflow run list \
-	--resource-group rg-grubify-sre \
-	--name la-grubify-servicenow-handler \
-	--query "[0:5].{status:status,startTime:startTime}" \
+az rest --method get \
+	--url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/rg-grubify-sre/providers/Microsoft.Logic/workflows/la-grubify-servicenow-handler/runs?api-version=2016-06-01&\$top=5" \
+	--query "value[].{status:properties.status,startTime:properties.startTime,endTime:properties.endTime}" \
 	-o table
 ```
+
+Azure Monitor does not replay an alert notification if the action group was
+empty when the alert first fired. After fixing action group wiring, wait for the
+metric alert to transition and fire again, or use Azure Monitor action-group test
+notifications to validate the receiver path.
 
 ### 6. Optional Microsoft Teams Connector
 
@@ -215,6 +246,6 @@ Now you have:
 2. **Authorize the GitHub repo**: **https://github.com/gderossilive/GrubifyDemo** in the SRE Agent portal if prompted
 3. **Configure ServiceNow** with the `.env` variables above so ServiceNow owns the incident record
 4. **Enable Teams** with the `.env` variables above and portal connector setup when you want Teams notifications
-5. **Simulate memory leak** with `./scripts/break-app.sh`
+5. **Simulate memory leak** by sending repeated `POST /api/cart/demo-user/items` requests to the API Container App
 6. **Review the run** in ServiceNow, the SRE Agent portal, Teams, and GitHub depending on configured connectors
 
