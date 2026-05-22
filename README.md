@@ -102,6 +102,14 @@ Then run:
 ./scripts/deploy-sre-agent.sh
 ```
 
+SRE source config files support environment placeholders in the form
+`${ENV_NAME:-default}`. The assembler resolves placeholders in `agent.json`,
+`connectors.json`, and YAML files under `sre-config/` before generating the
+deployment artifacts. Common overrides include `SRE_AGENT_RESOURCE_GROUP`,
+`AZURE_RESOURCE_GROUP`, `AGT_FUNCTION_URL`, `GITHUB_REPO`, `GITHUB_BRANCH`,
+`TEAMS_GROUP_ID`, `TEAMS_CHANNEL_ID`, `SERVICENOW_ASSIGNMENT_GROUP`, and
+`SERVICENOW_INDEXING_LOOKBACK_DAYS`.
+
 For the validated `grubify-agt` environment, run with the matching app/SRE
 resource groups and governance function URL:
 
@@ -230,12 +238,13 @@ TEAMS_CLIENT_ID=<optional-app-client-id>
 TEAMS_CLIENT_SECRET=<optional-app-client-secret>
 ```
 
-The current SRE Agent preview API exposes connector listing but did not expose a
-supported connector create/auth endpoint during validation. Applying the local
-Teams connector YAML returns `Unsupported kind: DataConnector`. Because of that,
-the script verifies whether a Microsoft Teams connector and Teams tools exist,
-but it does not silently create or authenticate the connector. Register and
-authenticate the Teams connector in the SRE Agent portal when required, then
+The current SRE Agent preview API exposes connector listing but does not provide
+a supported connector create/auth endpoint for the local Teams connector YAML.
+Applying copied connector output from another environment can create a visible
+connector that fails because its backing Azure API connection is not authenticated
+for the current environment. Because of that, keep `connectors.json` free of
+copied Teams connector entries and register/authenticate the Microsoft Teams
+connector in the SRE Agent portal when required. After portal authentication,
 rerun the script to verify it. The validated `grubify-agt` environment has a
 Teams connector and exposes `PostTeamsMessage`, `GetTeamsMessages`, and
 `ReplyToTeamsMessage`.

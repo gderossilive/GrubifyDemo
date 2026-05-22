@@ -18,7 +18,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 DEFAULT_EXTRAS_PATH = PROJECT_DIR / "build" / "agent.extras.json"
-DEFAULT_TOKEN_RESOURCE = "https://azuresre.ai"
+DEFAULT_TOKEN_RESOURCES = ("https://azuresre.dev", "https://azuresre.ai")
 SRE_AGENT_API_VERSION = "2025-05-01-preview"
 
 
@@ -35,8 +35,14 @@ def az(*args: str) -> str:
 
 
 def get_token() -> str:
-    token_resource = os.environ.get("SRE_AGENT_TOKEN_RESOURCE", DEFAULT_TOKEN_RESOURCE)
-    return az("account", "get-access-token", "--resource", token_resource, "--query", "accessToken", "-o", "tsv")
+    resources = [os.environ["SRE_AGENT_TOKEN_RESOURCE"]] if os.environ.get("SRE_AGENT_TOKEN_RESOURCE") else list(DEFAULT_TOKEN_RESOURCES)
+    errors = []
+    for token_resource in resources:
+        try:
+            return az("account", "get-access-token", "--resource", token_resource, "--query", "accessToken", "-o", "tsv")
+        except RuntimeError as exc:
+            errors.append(str(exc))
+    raise RuntimeError("Could not get SRE data-plane token:\n" + "\n".join(errors))
 
 
 def resolve_endpoint(resource_group: str, agent_name: str, subscription: str | None) -> str:
@@ -62,6 +68,32 @@ def resolve_endpoint(resource_group: str, agent_name: str, subscription: str | N
     if not endpoint:
         raise RuntimeError(f"Could not resolve SRE Agent endpoint for {agent_name} in {resource_group}")
     return endpoint.rstrip("/")
+
+
+def resolve_agent_identity(resource_group: str, agent_name: str, subscription: str | None) -> str:
+    args = [
+        "resource",
+        "show",
+        "--resource-group",
+        resource_group,
+        "--resource-type",
+        "Microsoft.App/agents",
+        "--name",
+        agent_name,
+        "--api-version",
+        SRE_AGENT_API_VERSION,
+        "--query",
+        "identity.userAssignedIdentities | keys(@)[0]",
+        "-o",
+        "tsv",
+    ]
+    if subscription:
+        args.extend(["--subscription", subscription])
+    try:
+        identity = az(*args)
+    except RuntimeError:
+        identity = ""
+    return identity or "SystemAssigned"
 
 
 def resolve_resource_group(args_resource_group: str | None, identity: dict[str, Any]) -> str | None:
@@ -143,6 +175,72 @@ def apply_subagents(endpoint: str, token: str, entries: list[dict[str, Any]], dr
         print(f"    applied {entry['name']}")
 
 
+def install_github_pat(endpoint: str, token: str, dry_run: bool) -> None:
+    github_pat = os.environ.get("GITHUB_PAT")
+    if not github_pat:
+        print("  GitHub auth: no GITHUB_PAT set")
+        return
+    if dry_run:
+        print("  GitHub auth: would install PAT")
+        return
+    body = json.dumps({"accessToken": github_pat}).encode("utf-8")
+    status, response = http_call("POST", f"{endpoint}/api/v1/Github/auth/pat", token, body)
+    if status in {200, 201, 202, 204}:
+        print("  GitHub auth: PAT installed")
+        return
+    if status == 405:
+        print("  GitHub auth: PAT endpoint is not enabled on this backend; OAuth sign-in may still be required")
+        return
+    raise RuntimeError(f"GitHub PAT install failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
+
+
+def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], identity: str, dry_run: bool) -> None:
+    github_repos = [repo for repo in repos if (repo.get("spec") or {}).get("type", "github").lower() == "github"]
+    if not github_repos:
+        print("  Code repos : none")
+        return
+    print(f"  Code repos : {len(github_repos)} GitHub repo(s)")
+    if not dry_run:
+        install_github_pat(endpoint, token, dry_run)
+        connector_body = json.dumps({
+            "name": "github",
+            "type": "AgentConnector",
+            "properties": {
+                "dataConnectorType": "GitHubOAuth",
+                "dataSource": "github-oauth",
+                "identity": identity,
+            },
+        }).encode("utf-8")
+        status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/connectors/github", token, connector_body)
+        if status not in {200, 201, 202, 204}:
+            raise RuntimeError(f"GitHub connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
+        print("    applied connector/github")
+    for repo in github_repos:
+        spec = repo.get("spec") or {}
+        name = repo.get("name") or Path(spec.get("url", "").rstrip("/")).name
+        url = spec.get("url") or ""
+        if url and not url.startswith(("http://", "https://")) and "/" in url:
+            url = f"https://github.com/{url}"
+        if not name or not url:
+            raise RuntimeError(f"Invalid GitHub repo entry: {repo}")
+        if dry_run:
+            print(f"    would apply repo/{name} ({url})")
+            continue
+        body = json.dumps({
+            "name": name,
+            "type": "CodeRepo",
+            "properties": {
+                "url": url,
+                "type": "GitHub",
+                "authConnectorName": "github",
+            },
+        }).encode("utf-8")
+        status, response = http_call("PUT", f"{endpoint}/api/v2/repos/{name}", token, body)
+        if status not in {200, 201, 202, 204}:
+            raise RuntimeError(f"GitHub repo apply failed for {name} (HTTP {status}): {response.decode(errors='replace')[:500]}")
+        print(f"    applied repo/{name}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Apply Grubify SRE Agent v2 data-plane extras.")
     parser.add_argument("--extras", default=str(DEFAULT_EXTRAS_PATH))
@@ -153,6 +251,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-knowledge", action="store_true")
     parser.add_argument("--skip-subagents", action="store_true")
+    parser.add_argument("--skip-repos", action="store_true")
     parser.add_argument("--skip-verify", action="store_true", help="Reserved for parity with the PI-Buddy v2 workflow.")
     return parser.parse_args()
 
@@ -181,14 +280,18 @@ def main() -> int:
                 raise RuntimeError("Provide --endpoint or set/provide SRE_AGENT_NAME and SRE_AGENT_RESOURCE_GROUP.")
             endpoint = resolve_endpoint(resource_group, agent_name, subscription)
         token = get_token()
+        identity = resolve_agent_identity(resource_group, agent_name, subscription) if agent_name and resource_group else "SystemAssigned"
         print(f"  Endpoint     : {endpoint}")
     else:
         token = ""
+        identity = "SystemAssigned"
 
     if not args.skip_knowledge:
         upload_knowledge(endpoint, token, extras.get("knowledge") or [], args.dry_run)
     if not args.skip_subagents:
         apply_subagents(endpoint, token, extras.get("subagents") or [], args.dry_run)
+    if not args.skip_repos:
+        apply_github_repos(endpoint, token, extras.get("repos") or [], identity, args.dry_run)
 
     if args.skip_verify:
         print("  Verify       : skipped")

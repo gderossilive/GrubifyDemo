@@ -1,0 +1,23 @@
+metadata:
+  name: grubify-http-errors
+spec:
+  incidentPlatform: ServiceNow
+  impactedService: ''
+  priorities: []
+  incidentType: ServiceNow
+  alertId: ''
+  titleContains: alert-http-5xx-grubify
+  titleContainsAll: []
+  titleContainsAny: []
+  titleNotContains: []
+  agentMode: autonomous
+  handlingAgent: incident-handler-agt
+  owningTeamId: ''
+  owningTeamIds: []
+  maxAutomatedInvestigationAttempts: 3
+  deepInvestigationEnabled: false
+  mergeEnabled: true
+  mergeWindowHours: 3
+  createdAt: '2026-05-21T08:47:27.8370608Z'
+  updatedAt: '2026-05-21T08:47:27.8370609Z'
+  isEnabled: true

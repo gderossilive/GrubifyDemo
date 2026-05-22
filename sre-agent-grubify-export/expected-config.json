@@ -1,0 +1,35 @@
+{
+  "_scenario": "exported",
+  "agent": {
+    "accessLevel": "High",
+    "actionMode": "autonomous",
+    "upgradeChannel": "Preview",
+    "defaultModelProvider": "Anthropic",
+    "incidentPlatform": "ServiceNow"
+  },
+  "connectors": [
+    {
+      "name": "connector-9d90",
+      "type": "Teams"
+    }
+  ],
+  "skills": [],
+  "subagents": [
+    "code-analyzer",
+    "issue-triager",
+    "incident-handler",
+    "incident-handler-agt"
+  ],
+  "hooks": [],
+  "commonPrompts": [],
+  "scheduledTasks": [],
+  "responsePlans": [
+    {
+      "name": "grubify-http-errors",
+      "handlingAgent": "incident-handler-agt"
+    }
+  ],
+  "repos": [
+    "GrubifyDemo"
+  ]
+}

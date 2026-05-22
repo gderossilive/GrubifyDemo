@@ -1,0 +1,24 @@
+{
+  "toggles": {
+    "enableAppInsightsConnector": false,
+    "appInsightsResourceId": "",
+    "appInsightsAppId": "",
+    "enableLogAnalyticsConnector": false,
+    "lawResourceId": "",
+    "enableAzureMonitorConnector": false,
+    "azureMonitorLookbackDays": 7
+  },
+  "connectors": [
+    {
+      "name": "connector-9d90",
+      "properties": {
+        "dataConnectorType": "Teams",
+        "dataSource": "https://d0ff6c72ac91c873.09.common.logic-swedencentral.azure-apihub.net/apim/teams/51cc2d35e632425e86a5a2b9917eb22f;231764ec-b797-41aa-988e-5a9a4c3bd49d;19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2",
+        "extendedProperties": {
+          "addFooter": true
+        },
+        "identity": "system"
+      }
+    }
+  ]
+}

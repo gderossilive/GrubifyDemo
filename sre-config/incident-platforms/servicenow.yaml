@@ -1,0 +1,14 @@
+api_version: azuresre.ai/v1
+kind: IncidentPlatformConfiguration
+metadata:
+  name: servicenow
+spec:
+  platformType: ServiceNow
+  providerType: servicenow
+  assignmentGroup: ${SERVICENOW_ASSIGNMENT_GROUP:-Software}
+  categories: []
+  priorities:
+    - 1
+    - 2
+    - 3
+  lookbackDays: ${SERVICENOW_INDEXING_LOOKBACK_DAYS:-30}

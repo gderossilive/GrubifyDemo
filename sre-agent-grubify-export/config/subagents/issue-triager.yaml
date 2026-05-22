@@ -1,0 +1,24 @@
+metadata:
+  name: issue-triager
+spec:
+  instructions: subagents/issue-triager.instructions.md
+  handoffDescription: Triages Grubify app issues by classifying, labeling, and commenting
+  handoffs: []
+  tools:
+  - SearchMemory
+  mcpTools:
+  - github-mcp/*
+  connectors: []
+  allowParallelToolCalls: true
+  agentsAsTools: []
+  maxReflectionCount: 0
+  criticPromptPath: ''
+  criticOnHandOff: false
+  customReflectionNote: ''
+  commonPrompts: []
+  disableDocumentRetrieval: false
+  enableHandoffPromptOverride: false
+  commonTools: []
+  enableVanillaMode: false
+  enableSkills: false
+  addSystemSkills: false

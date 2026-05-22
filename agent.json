@@ -1,24 +1,29 @@
 {
   "schema": "grubify-sre-agent-v2.agent/v1",
   "identity": {
-    "agentName": "sre-agent-grubify",
-    "resourceGroup": "",
-    "location": "swedencentral",
-    "targetResourceGroups": []
+    "agentName": "${SRE_AGENT_NAME:-sre-agent-grubify}",
+    "resourceGroup": "${SRE_AGENT_RESOURCE_GROUP:-rg-grubify-sre-v2gid}",
+    "subscription": "${AZURE_SUBSCRIPTION_ID:-06dbbc7b-2363-4dd4-9803-95d07f1a8d3e}",
+    "location": "${AZURE_LOCATION:-swedencentral}",
+    "targetResourceGroups": [
+      "${AZURE_RESOURCE_GROUP:-rg-grubify-app-v2gid}"
+    ]
   },
   "access": {
     "accessLevel": "High",
     "actionMode": "autonomous"
   },
   "governance": {
-    "functionUrl": "",
-    "authMode": "none",
-    "clientId": "",
-    "functionKey": ""
+    "functionUrl": "${AGT_FUNCTION_URL:-https://func-agt-grubify-v2gid.azurewebsites.net}",
+    "authMode": "${AGT_AUTH_MODE:-none}",
+    "clientId": "${AGT_CLIENT_ID:-}",
+    "functionKey": "${AGT_FUNCTION_KEY:-}"
   },
   "content": {
     "knowledgePath": "knowledge",
     "agentsPath": "sre-config/agents",
+    "incidentPlatformsPath": "sre-config/incident-platforms",
+    "expectedConfigPath": "sre-config/expected-config.json",
     "agents": [
       "code-analyzer",
       "issue-triager",

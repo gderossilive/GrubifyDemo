@@ -1,0 +1,39 @@
+{
+  "_scenario": "workspace",
+  "agent": {
+    "accessLevel": "High",
+    "actionMode": "autonomous",
+    "upgradeChannel": "Preview",
+    "defaultModelProvider": "Anthropic",
+    "incidentPlatform": "ServiceNow"
+  },
+  "connectors": [],
+  "skills": [],
+  "subagents": [
+    "code-analyzer",
+    "issue-triager",
+    "incident-handler",
+    "incident-handler-agt"
+  ],
+  "hooks": [],
+  "commonPrompts": [],
+  "scheduledTasks": [],
+  "responsePlans": [
+    {
+      "name": "grubify-http-errors",
+      "handlingAgent": "incident-handler-agt"
+    }
+  ],
+  "repos": [
+    "${GITHUB_REPO_NAME:-GrubifyDemo}"
+  ],
+  "knowledgeSources": [
+    "github-issue-triage.md",
+    "grubify-app-architecture.md",
+    "grubify-infra-architecture.md",
+    "http-500-errors.md",
+    "incident-report-template.md",
+    "servicenow-incident-flow.md",
+    "teams-messaging-runbook.md"
+  ]
+}

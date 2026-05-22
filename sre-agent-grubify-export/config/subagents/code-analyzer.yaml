@@ -1,0 +1,31 @@
+metadata:
+  name: code-analyzer
+spec:
+  instructions: subagents/code-analyzer.instructions.md
+  handoffDescription: Deep root cause analysis using runbooks + source code, creates
+    detailed GitHub issues
+  handoffs: []
+  tools:
+  - SearchMemory
+  - RunAzCliReadCommands
+  - RunAzCliWriteCommands
+  - GetAzCliHelp
+  - QueryLogAnalyticsByWorkspaceId
+  - QueryAppInsightsByResourceId
+  - ExecutePythonCode
+  mcpTools:
+  - github-mcp/*
+  connectors: []
+  allowParallelToolCalls: true
+  agentsAsTools: []
+  maxReflectionCount: 0
+  criticPromptPath: ''
+  criticOnHandOff: false
+  customReflectionNote: ''
+  commonPrompts: []
+  disableDocumentRetrieval: false
+  enableHandoffPromptOverride: false
+  commonTools: []
+  enableVanillaMode: false
+  enableSkills: false
+  addSystemSkills: false

@@ -30,7 +30,7 @@ description: >
 #   3. Attempt remediation (scale out, restart, config changes)
 #   4. Update ServiceNow throughout the lifecycle
 #   5. Hand off source-code analysis to code-analyzer when needed
-agent: incident-handler-agt
+agent: ${INCIDENT_HANDLER_AGENT:-incident-handler-agt}
 
 responsePlanFilter:
    id: grubify-http-errors
@@ -39,9 +39,9 @@ responsePlanFilter:
    partitionKey: IncidentFilterServiceNow
    incidentType: ServiceNow
    priorities: []
-   titleContains: alert-http-5xx-grubify
-   handlingAgent: incident-handler-agt
-   agentMode: autonomous
+   titleContains: ${ALERT_NAME:-alert-http-5xx-grubify}
+   handlingAgent: ${INCIDENT_HANDLER_AGENT:-incident-handler-agt}
+   agentMode: ${SRE_AGENT_MODE:-autonomous}
    isEnabled: true
    maxAutomatedInvestigationAttempts: 3
    deepInvestigationEnabled: false
@@ -74,4 +74,4 @@ agentPrompt: |
       Search memory for the "incident report template" and follow it exactly.
 
 # Agent operating mode: autonomous allows writes (restarts, scaling, etc.)
-agentMode: autonomous
+agentMode: ${SRE_AGENT_MODE:-autonomous}

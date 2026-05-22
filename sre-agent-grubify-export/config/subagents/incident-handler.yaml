@@ -1,0 +1,38 @@
+metadata:
+  name: incident-handler
+spec:
+  instructions: subagents/incident-handler.instructions.md
+  handoffDescription: Investigates incidents using runtime evidence, updates ServiceNow,
+    and posts to Teams without source-code access
+  handoffs: []
+  tools:
+  - SearchMemory
+  - RunAzCliReadCommands
+  - RunAzCliWriteCommands
+  - GetAzCliHelp
+  - QueryLogAnalyticsByWorkspaceId
+  - QueryAppInsightsByResourceId
+  - ExecutePythonCode
+  - AcknowledgeServiceNowIncident
+  - GetServiceNowIncident
+  - PostServiceNowDiscussionEntry
+  - ResolveServiceNowIncident
+  - GetTeamsMessages
+  - PostTeamsMessage
+  - ReplyToTeamsMessage
+  mcpTools:
+  - teams-mcp/*
+  connectors: []
+  allowParallelToolCalls: true
+  agentsAsTools: []
+  maxReflectionCount: 0
+  criticPromptPath: ''
+  criticOnHandOff: false
+  customReflectionNote: ''
+  commonPrompts: []
+  disableDocumentRetrieval: false
+  enableHandoffPromptOverride: false
+  commonTools: []
+  enableVanillaMode: false
+  enableSkills: false
+  addSystemSkills: false

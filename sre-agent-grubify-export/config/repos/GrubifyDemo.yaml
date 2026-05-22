@@ -1,0 +1,5 @@
+name: GrubifyDemo
+spec:
+  url: https://github.com/gderossilive/GrubifyDemo
+  type: github
+  branch: main

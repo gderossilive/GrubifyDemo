@@ -1,0 +1,25 @@
+{
+  "_description": "SRE Agent configuration — edit these values to clone to a new environment.",
+  "_exported_at": "2026-05-22T12:47:58Z",
+  "identity": {
+    "agentName": "sre-agent-grubify",
+    "resourceGroup": "rg-grubify-sre-agt01",
+    "subscription": "06dbbc7b-2363-4dd4-9803-95d07f1a8d3e",
+    "location": "swedencentral",
+    "targetResourceGroups": [
+      "rg-grubify-app-agt01"
+    ]
+  },
+  "access": {
+    "accessLevel": "High",
+    "actionMode": "autonomous"
+  },
+  "upgradeChannel": "Preview",
+  "defaultModelProvider": "Anthropic",
+  "monthlyAgentUnitLimit": 10000,
+  "tags": {},
+  "toggles": {
+    "enableWebhookBridge": false,
+    "webhookBridgeTriggerUrl": ""
+  }
+}

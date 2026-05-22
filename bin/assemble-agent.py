@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,17 +21,33 @@ except ImportError:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 DEFAULT_OUTPUT_DIR = PROJECT_DIR / "build"
+ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def expand_env_placeholders(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: expand_env_placeholders(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [expand_env_placeholders(item) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    def replace(match: re.Match[str]) -> str:
+        env_name, default = match.groups()
+        return os.environ.get(env_name, default or "")
+
+    return ENV_PLACEHOLDER_PATTERN.sub(replace, value)
 
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as handle:
-        return json.load(handle)
+        return expand_env_placeholders(json.load(handle))
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as handle:
         loaded = yaml.safe_load(handle)
-    return loaded or {}
+    return expand_env_placeholders(loaded or {})
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -107,6 +124,16 @@ def render_agent_yaml(yaml_path: Path, replacements: dict[str, str], governance:
 
     data = yaml.safe_load(raw) or {}
     spec = data.get("spec", data)
+    prompt_file = spec.pop("system_prompt_file", None)
+    if prompt_file:
+        prompt_path = (yaml_path.parent / prompt_file).resolve()
+        if not prompt_path.exists():
+            raise FileNotFoundError(f"Missing system prompt file for {yaml_path.name}: {prompt_path}")
+        prompt = prompt_path.read_text(encoding="utf-8")
+        for old, new in replacements.items():
+            prompt = prompt.replace(old, new)
+        spec["system_prompt"] = prompt.rstrip("\n")
+
     hooks = resolve_hooks(spec.get("hooks") or {}, yaml_path, governance)
     if hooks:
         spec["hooks"] = hooks
@@ -141,10 +168,81 @@ def build_knowledge_entries(knowledge_dir: Path) -> list[dict[str, Any]]:
     ]
 
 
+def build_knowledge_connector_entries(knowledge_dir: Path) -> list[dict[str, Any]]:
+    if not knowledge_dir.exists():
+        return []
+    entries = []
+    for path in sorted(knowledge_dir.glob("*.md")):
+        connector_name = f"knowledge-{path.stem}".lower().replace("_", "-")
+        entries.append({
+            "name": connector_name,
+            "properties": {
+                "dataConnectorType": "KnowledgeText",
+                "dataSource": connector_name,
+                "extendedProperties": {
+                    "displayName": path.name,
+                    "content": path.read_text(encoding="utf-8"),
+                    "contentType": "text/markdown",
+                    "metadata.originalName": path.name,
+                },
+                "identity": "system",
+            },
+        })
+    return entries
+
+
+def build_incident_platform_entries(incident_platforms_dir: Path) -> list[dict[str, Any]]:
+    if not incident_platforms_dir.exists():
+        return []
+    entries = []
+    for path in sorted(incident_platforms_dir.glob("*.yaml")):
+        data = load_yaml(path)
+        metadata = data.get("metadata") or {}
+        spec = data.get("spec") or {}
+        if isinstance(spec.get("lookbackDays"), str) and spec["lookbackDays"].isdigit():
+            spec["lookbackDays"] = int(spec["lookbackDays"])
+        name = metadata.get("name") or spec.get("name") or path.stem
+        entries.append({
+            "name": name,
+            "source": str(path.relative_to(PROJECT_DIR)),
+            "spec": spec,
+        })
+    return entries
+
+
+def build_repo_entries(connectors_config: dict[str, Any]) -> list[dict[str, Any]]:
+    github = connectors_config.get("github") or {}
+    repo = os.environ.get("GITHUB_REPO")
+    if repo and "/" in repo:
+        owner, name = repo.split("/", 1)
+    else:
+        owner = os.environ.get("GITHUB_USER") or github.get("owner", "gderossilive")
+        name = github.get("name", "GrubifyDemo")
+    if not owner or not name:
+        return []
+    return [{
+        "name": name,
+        "spec": {
+            "url": f"https://github.com/{owner}/{name}",
+            "type": "github",
+            "branch": github.get("branch", "main"),
+        },
+    }]
+
+
+def load_expected_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return load_json(path)
+
+
 def build_parameters(agent_config: dict[str, Any], connectors_config: dict[str, Any]) -> dict[str, Any]:
     identity = agent_config.get("identity") or {}
     access = agent_config.get("access") or {}
+    content = agent_config.get("content") or {}
+    knowledge_dir = PROJECT_DIR / content.get("knowledgePath", "knowledge")
     toggles = connectors_config.get("toggles") or {}
+    connectors = connectors_config.get("connectors", []) + build_knowledge_connector_entries(knowledge_dir)
     return {
         "metadata": {
             "schema": "grubify-sre-agent-v2.parameters/v1",
@@ -157,7 +255,7 @@ def build_parameters(agent_config: dict[str, Any], connectors_config: dict[str, 
             "sreTargetResourceIds": identity.get("targetResourceGroups", []),
             "sreAccessLevel": access.get("accessLevel", "High"),
             "sreActionMode": access.get("actionMode", "autonomous"),
-            "sreConnectors": connectors_config.get("connectors", []),
+            "sreConnectors": connectors,
             "sreConnectorToggles": toggles,
             "sreAppInsightsResourceId": connectors_config.get("appInsightsResourceId", ""),
             "sreAppInsightsAppId": connectors_config.get("appInsightsAppId", ""),
@@ -171,9 +269,15 @@ def build_extras(agent_config: dict[str, Any], connectors_config: dict[str, Any]
     content = agent_config.get("content") or {}
     agents_dir = PROJECT_DIR / content.get("agentsPath", "sre-config/agents")
     knowledge_dir = PROJECT_DIR / content.get("knowledgePath", "knowledge")
+    incident_platforms_dir = PROJECT_DIR / content.get("incidentPlatformsPath", "sre-config/incident-platforms")
+    expected_config_path = PROJECT_DIR / content.get("expectedConfigPath", "sre-config/expected-config.json")
     requested_agents = content.get("agents") or []
     governance = resolve_governance(agent_config)
     replacements = connector_values(connectors_config)
+    repos = build_repo_entries(connectors_config)
+    expected_config = load_expected_config(expected_config_path)
+    if repos:
+        expected_config["repos"] = [repo["name"] for repo in repos]
 
     subagents = []
     for agent_name in requested_agents:
@@ -191,7 +295,10 @@ def build_extras(agent_config: dict[str, Any], connectors_config: dict[str, Any]
         "agent": agent_config,
         "connectors": connectors_config.get("connectors", []),
         "connectorToggles": connectors_config.get("toggles") or {},
+        "repos": repos,
         "knowledge": build_knowledge_entries(knowledge_dir),
+        "incidentPlatforms": build_incident_platform_entries(incident_platforms_dir),
+        "expectedConfig": expected_config,
         "skills": [],
         "subagents": subagents,
         "tools": [],

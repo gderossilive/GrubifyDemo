@@ -1,0 +1,11 @@
+name: servicenow
+spec:
+  assignmentGroup: Software
+  categories: []
+  priorities:
+  - 1
+  - 2
+  - 3
+  lookbackDays: 30
+  createdAt: '2026-05-21T08:47:27.2355955Z'
+  updatedAt: '2026-05-21T09:41:00.2448587Z'

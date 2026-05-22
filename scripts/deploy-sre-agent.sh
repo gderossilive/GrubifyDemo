@@ -50,6 +50,51 @@ print(quote(sys.argv[1], safe=""))
 PY
 }
 
+yaml_config_value() {
+  local path="$1"
+  local key_path="$2"
+  if [[ ! -f "$path" ]]; then
+  return 0
+  fi
+  python3 - "$path" "$key_path" <<'PY'
+import os
+import re
+import sys
+
+try:
+  import yaml
+except ImportError:
+  sys.exit(0)
+
+env_pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+def expand_env(value):
+  if isinstance(value, dict):
+    return {key: expand_env(item) for key, item in value.items()}
+  if isinstance(value, list):
+    return [expand_env(item) for item in value]
+  if not isinstance(value, str):
+    return value
+  return env_pattern.sub(lambda match: os.environ.get(match.group(1), match.group(2) or ""), value)
+
+path, key_path = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+  data = expand_env(yaml.safe_load(handle) or {})
+value = data
+for part in key_path.split("."):
+  if isinstance(value, dict):
+    value = value.get(part, "")
+  else:
+    value = ""
+  if value in (None, ""):
+    break
+if isinstance(value, bool):
+  print(str(value).lower())
+elif isinstance(value, (str, int, float)):
+  print(value)
+PY
+}
+
 SUBSCRIPTION="$(first_non_empty "$(azd_value AZURE_SUBSCRIPTION_ID)" "${AZURE_SUBSCRIPTION_ID:-}" "$(az_value id)")"
 LOCATION="$(first_non_empty "$(azd_value AZURE_LOCATION)" "${AZURE_LOCATION:-}" "swedencentral")"
 APP_RG="$(first_non_empty "$(azd_value AZURE_RESOURCE_GROUP)" "${APP_RG:-}" "${AZURE_RESOURCE_GROUP:-}")"
@@ -95,11 +140,13 @@ else
 fi
 
 ENABLE_SERVICENOW_HANDLER="${ENABLE_SERVICENOW_HANDLER:-true}"
+SERVICENOW_CONFIG_FILE="${SERVICENOW_CONFIG_FILE:-${REPO_ROOT}/sre-config/incident-platforms/servicenow.yaml}"
 SERVICENOW_INSTANCE="${SERVICENOW_INSTANCE:-}"
 SERVICENOW_INSTANCE_URL="${SERVICENOW_INSTANCE_URL:-}"
 SERVICENOW_USERNAME="${SERVICENOW_USERNAME:-}"
 SERVICENOW_PASSWORD="${SERVICENOW_PASSWORD:-}"
-SERVICENOW_ASSIGNMENT_GROUP="${SERVICENOW_ASSIGNMENT_GROUP:-}"
+SERVICENOW_ASSIGNMENT_GROUP="${SERVICENOW_ASSIGNMENT_GROUP:-$(yaml_config_value "$SERVICENOW_CONFIG_FILE" spec.assignmentGroup)}"
+SERVICENOW_INDEXING_LOOKBACK_DAYS="${SERVICENOW_INDEXING_LOOKBACK_DAYS:-$(yaml_config_value "$SERVICENOW_CONFIG_FILE" spec.lookbackDays)}"
 SERVICENOW_INDEXING_LOOKBACK_DAYS="${SERVICENOW_INDEXING_LOOKBACK_DAYS:-30}"
 SERVICENOW_CATEGORY="${SERVICENOW_CATEGORY:-software}"
 SERVICENOW_LOGIC_APP_NAME="${SERVICENOW_LOGIC_APP_NAME:-la-grubify-servicenow-handler}"
@@ -221,6 +268,31 @@ run_v2_flow() {
     SRE_AGENT_ENDPOINT="$AGENT_ENDPOINT" \
       python3 bin/apply-extras.py
   )
+}
+
+deploy_arm_connectors() {
+  local parameters_file="${REPO_ROOT}/build/agent.parameters.json"
+  local connectors_json
+  local connector_count
+  if [[ ! -f "$parameters_file" ]]; then
+    echo "  WARN missing $parameters_file; skipping ARM connector deployment"
+    return
+  fi
+
+  connectors_json="$(jq -c '.parameters.sreConnectors // []' "$parameters_file")"
+  connector_count="$(jq 'length' <<<"$connectors_json")"
+  if [[ "$connector_count" -eq 0 ]]; then
+    echo "  ARM connectors: none"
+    return
+  fi
+
+  az deployment group create \
+    --name "sre-agent-connectors-$(date -u +%Y%m%d%H%M%S)" \
+    --resource-group "$SRE_RG" \
+    --template-file "${REPO_ROOT}/infra/core/host/sre-agent-extensions.bicep" \
+    --parameters agentName="$AGENT_NAME" connectors="$connectors_json" \
+    --output none
+  echo "  OK deployed ${connector_count} ARM connector(s)"
 }
 
 wire_action_group_logic_app() {
@@ -446,6 +518,8 @@ upsert_response_plan_filter() {
   local http_code
   filter_body="$(python3 - "$response_plan" "$ALERT_NAME" "$INCIDENT_HANDLER_AGENT" <<'PY'
 import json
+import os
+import re
 import sys
 
 try:
@@ -453,9 +527,20 @@ try:
 except ImportError as exc:
     raise SystemExit("PyYAML is required to apply response plan filters") from exc
 
+env_pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+def expand_env(value):
+  if isinstance(value, dict):
+    return {key: expand_env(item) for key, item in value.items()}
+  if isinstance(value, list):
+    return [expand_env(item) for item in value]
+  if not isinstance(value, str):
+    return value
+  return env_pattern.sub(lambda match: os.environ.get(match.group(1), match.group(2) or ""), value)
+
 path, alert_name, handler = sys.argv[1:4]
 with open(path, encoding="utf-8") as handle:
-    plan = yaml.safe_load(handle) or {}
+  plan = expand_env(yaml.safe_load(handle) or {})
 filter_config = dict(plan.get("responsePlanFilter") or {})
 filter_config["titleContains"] = filter_config.get("titleContains") or alert_name
 filter_config["handlingAgent"] = filter_config.get("handlingAgent") or handler
@@ -605,6 +690,7 @@ echo "    Teams        : $TEAMS_CONNECTOR_ENABLED"
 az account set --subscription "$SUBSCRIPTION"
 require_agent_endpoint
 run_v2_flow
+deploy_arm_connectors
 
 AZURESRE_TOKEN="$(get_sre_token)"
 

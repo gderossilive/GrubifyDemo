@@ -3,26 +3,28 @@
   "toggles": {
     "enableAppInsightsConnector": false,
     "enableLogAnalyticsConnector": false,
-    "enableAzureMonitorConnector": false
+    "enableAzureMonitorConnector": false,
+    "azureMonitorLookbackDays": 7
   },
   "appInsightsResourceId": "",
   "appInsightsAppId": "",
   "lawResourceId": "",
   "azureMonitorScope": "",
   "github": {
-    "owner": "gderossilive",
-    "name": "GrubifyDemo"
+    "owner": "${GITHUB_REPO_OWNER:-gderossilive}",
+    "name": "${GITHUB_REPO_NAME:-GrubifyDemo}",
+    "branch": "${GITHUB_BRANCH:-main}"
   },
   "teams": {
     "enabled": false,
-    "tenantId": "86d068c0-1c9f-4b9e-939d-15146ccf2ad6",
-    "groupId": "231764ec-b797-41aa-988e-5a9a4c3bd49d",
-    "channelId": "19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2"
+    "tenantId": "${TEAMS_TENANT_ID:-86d068c0-1c9f-4b9e-939d-15146ccf2ad6}",
+    "groupId": "${TEAMS_GROUP_ID:-231764ec-b797-41aa-988e-5a9a4c3bd49d}",
+    "channelId": "${TEAMS_CHANNEL_ID:-19:RcMSCHJ_hrKRbTc9QPrK7EAsaPXXTJkmub39pkKKLDE1@thread.tacv2}"
   },
   "serviceNow": {
     "enabled": true,
-    "assignmentGroup": "",
-    "indexingLookbackDays": 30
+    "assignmentGroup": "${SERVICENOW_ASSIGNMENT_GROUP:-Software}",
+    "indexingLookbackDays": "${SERVICENOW_INDEXING_LOOKBACK_DAYS:-30}"
   },
   "connectors": []
 }

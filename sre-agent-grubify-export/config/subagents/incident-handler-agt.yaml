@@ -1,0 +1,225 @@
+metadata:
+  name: incident-handler-agt
+spec:
+  instructions: subagents/incident-handler-agt.instructions.md
+  handoffDescription: Governed incident handler using AGT hooks; investigates runtime
+    evidence, updates ServiceNow, and posts to Teams without source-code access
+  handoffs: []
+  tools:
+  - SearchMemory
+  - RunAzCliReadCommands
+  - RunAzCliWriteCommands
+  - GetAzCliHelp
+  - QueryLogAnalyticsByWorkspaceId
+  - QueryAppInsightsByResourceId
+  - ExecutePythonCode
+  - AcknowledgeServiceNowIncident
+  - GetServiceNowIncident
+  - PostServiceNowDiscussionEntry
+  - ResolveServiceNowIncident
+  - GetTeamsMessages
+  - PostTeamsMessage
+  - ReplyToTeamsMessage
+  mcpTools:
+  - teams-mcp/*
+  connectors: []
+  allowParallelToolCalls: true
+  agentsAsTools: []
+  maxReflectionCount: 0
+  criticPromptPath: ''
+  criticOnHandOff: false
+  customReflectionNote: ''
+  commonPrompts: []
+  disableDocumentRetrieval: false
+  enableHandoffPromptOverride: false
+  commonTools: []
+  enableVanillaMode: false
+  enableSkills: false
+  addSystemSkills: false
+  hooks:
+    Start:
+    - type: Prompt
+      script: "#!/usr/bin/env python3\n\"\"\"\nSRE Agent hook bridge to the Grubify\
+        \ AGT governance endpoint.\n\nThis file is embedded inline into SRE Agent\
+        \ hook configuration by the deploy\nscript. Keep it stdlib-only; the SRE hook\
+        \ sandbox does not install packages.\n\"\"\"\n\nimport json\nimport os\nimport\
+        \ sys\nimport urllib.error\nimport urllib.parse\nimport urllib.request\n\n\
+        FUNCTION_URL = \"https://func-agt-grubify-agt01.azurewebsites.net\".rstrip(\"\
+        /\")\nAUTH_MODE = \"none\"\nCLIENT_ID = \"\"\nFUNCTION_KEY = \"\"\nHOOK_TYPE\
+        \ = \"start_audit\"\nTIMEOUT_SECONDS = 20\n\n\ndef _read_context():\n    raw\
+        \ = sys.stdin.read()\n    if not raw.strip():\n        return {}\n    try:\n\
+        \        return json.loads(raw)\n    except Exception:\n        return {\"\
+        raw\": raw}\n\n\ndef _allow(message):\n    return {\"allowed\": True, \"message\"\
+        : message}\n\n\ndef _block(message):\n    return {\"allowed\": False, \"message\"\
+        : message}\n\n\ndef _token_from_imds():\n    resource = CLIENT_ID or \"https://management.azure.com/\"\
+        \n    query = urllib.parse.urlencode({\"api-version\": \"2018-02-01\", \"\
+        resource\": resource})\n    request = urllib.request.Request(\n        \"\
+        http://169.254.169.254/metadata/identity/oauth2/token?\" + query,\n      \
+        \  headers={\"Metadata\": \"true\"},\n    )\n    with urllib.request.urlopen(request,\
+        \ timeout=TIMEOUT_SECONDS) as response:\n        payload = json.loads(response.read().decode(\"\
+        utf-8\"))\n    return payload[\"access_token\"]\n\n\ndef _headers():\n   \
+        \ headers = {\"Content-Type\": \"application/json\"}\n    auth_mode = AUTH_MODE.lower()\n\
+        \    if auth_mode in {\"managed_identity\", \"mi\"}:\n        headers[\"Authorization\"\
+        ] = \"Bearer \" + _token_from_imds()\n    elif auth_mode in {\"function_key\"\
+        , \"key\"} and FUNCTION_KEY:\n        headers[\"x-functions-key\"] = FUNCTION_KEY\n\
+        \    return headers\n\n\ndef _call_governance(context):\n    body = json.dumps({\"\
+        hook_type\": HOOK_TYPE, \"context\": context}).encode(\"utf-8\")\n    request\
+        \ = urllib.request.Request(\n        FUNCTION_URL + \"/api/hook\",\n     \
+        \   data=body,\n        headers=_headers(),\n        method=\"POST\",\n  \
+        \  )\n    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as\
+        \ response:\n        return json.loads(response.read().decode(\"utf-8\"))\n\
+        \n\ndef main():\n    context = _read_context()\n    if not FUNCTION_URL or\
+        \ FUNCTION_URL.startswith(\"##\"):\n        print(json.dumps(_allow(\"[AGT]\
+        \ Governance endpoint is not configured.\")))\n        return\n\n    try:\n\
+        \        decision = _call_governance(context)\n    except urllib.error.HTTPError\
+        \ as exc:\n        details = exc.read().decode(\"utf-8\", errors=\"replace\"\
+        )[:500]\n        if HOOK_TYPE == \"pre_tool_policy\":\n            print(json.dumps(_block(\"\
+        [AGT] Governance service rejected the request: \" + details)))\n        else:\n\
+        \            print(json.dumps(_allow(\"[AGT] Governance service error: \"\
+        \ + details)))\n        return\n    except Exception as exc:\n        if HOOK_TYPE\
+        \ == \"pre_tool_policy\":\n            print(json.dumps(_block(\"[AGT] Governance\
+        \ service unavailable: \" + str(exc))))\n        else:\n            print(json.dumps(_allow(\"\
+        [AGT] Governance service unavailable: \" + str(exc))))\n        return\n\n\
+        \    print(json.dumps(decision))\n\n\nif __name__ == \"__main__\":\n    main()\n"
+      timeout: 30
+      failMode: Allow
+    PreToolUse:
+    - type: Prompt
+      script: "#!/usr/bin/env python3\n\"\"\"\nSRE Agent hook bridge to the Grubify\
+        \ AGT governance endpoint.\n\nThis file is embedded inline into SRE Agent\
+        \ hook configuration by the deploy\nscript. Keep it stdlib-only; the SRE hook\
+        \ sandbox does not install packages.\n\"\"\"\n\nimport json\nimport os\nimport\
+        \ sys\nimport urllib.error\nimport urllib.parse\nimport urllib.request\n\n\
+        FUNCTION_URL = \"https://func-agt-grubify-agt01.azurewebsites.net\".rstrip(\"\
+        /\")\nAUTH_MODE = \"none\"\nCLIENT_ID = \"\"\nFUNCTION_KEY = \"\"\nHOOK_TYPE\
+        \ = \"pre_tool_policy\"\nTIMEOUT_SECONDS = 20\n\n\ndef _read_context():\n\
+        \    raw = sys.stdin.read()\n    if not raw.strip():\n        return {}\n\
+        \    try:\n        return json.loads(raw)\n    except Exception:\n       \
+        \ return {\"raw\": raw}\n\n\ndef _allow(message):\n    return {\"allowed\"\
+        : True, \"message\": message}\n\n\ndef _block(message):\n    return {\"allowed\"\
+        : False, \"message\": message}\n\n\ndef _token_from_imds():\n    resource\
+        \ = CLIENT_ID or \"https://management.azure.com/\"\n    query = urllib.parse.urlencode({\"\
+        api-version\": \"2018-02-01\", \"resource\": resource})\n    request = urllib.request.Request(\n\
+        \        \"http://169.254.169.254/metadata/identity/oauth2/token?\" + query,\n\
+        \        headers={\"Metadata\": \"true\"},\n    )\n    with urllib.request.urlopen(request,\
+        \ timeout=TIMEOUT_SECONDS) as response:\n        payload = json.loads(response.read().decode(\"\
+        utf-8\"))\n    return payload[\"access_token\"]\n\n\ndef _headers():\n   \
+        \ headers = {\"Content-Type\": \"application/json\"}\n    auth_mode = AUTH_MODE.lower()\n\
+        \    if auth_mode in {\"managed_identity\", \"mi\"}:\n        headers[\"Authorization\"\
+        ] = \"Bearer \" + _token_from_imds()\n    elif auth_mode in {\"function_key\"\
+        , \"key\"} and FUNCTION_KEY:\n        headers[\"x-functions-key\"] = FUNCTION_KEY\n\
+        \    return headers\n\n\ndef _call_governance(context):\n    body = json.dumps({\"\
+        hook_type\": HOOK_TYPE, \"context\": context}).encode(\"utf-8\")\n    request\
+        \ = urllib.request.Request(\n        FUNCTION_URL + \"/api/hook\",\n     \
+        \   data=body,\n        headers=_headers(),\n        method=\"POST\",\n  \
+        \  )\n    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as\
+        \ response:\n        return json.loads(response.read().decode(\"utf-8\"))\n\
+        \n\ndef main():\n    context = _read_context()\n    if not FUNCTION_URL or\
+        \ FUNCTION_URL.startswith(\"##\"):\n        print(json.dumps(_allow(\"[AGT]\
+        \ Governance endpoint is not configured.\")))\n        return\n\n    try:\n\
+        \        decision = _call_governance(context)\n    except urllib.error.HTTPError\
+        \ as exc:\n        details = exc.read().decode(\"utf-8\", errors=\"replace\"\
+        )[:500]\n        if HOOK_TYPE == \"pre_tool_policy\":\n            print(json.dumps(_block(\"\
+        [AGT] Governance service rejected the request: \" + details)))\n        else:\n\
+        \            print(json.dumps(_allow(\"[AGT] Governance service error: \"\
+        \ + details)))\n        return\n    except Exception as exc:\n        if HOOK_TYPE\
+        \ == \"pre_tool_policy\":\n            print(json.dumps(_block(\"[AGT] Governance\
+        \ service unavailable: \" + str(exc))))\n        else:\n            print(json.dumps(_allow(\"\
+        [AGT] Governance service unavailable: \" + str(exc))))\n        return\n\n\
+        \    print(json.dumps(decision))\n\n\nif __name__ == \"__main__\":\n    main()\n"
+      matcher: '*'
+      timeout: 30
+      failMode: Block
+    PostToolUse:
+    - type: Prompt
+      script: "#!/usr/bin/env python3\n\"\"\"\nSRE Agent hook bridge to the Grubify\
+        \ AGT governance endpoint.\n\nThis file is embedded inline into SRE Agent\
+        \ hook configuration by the deploy\nscript. Keep it stdlib-only; the SRE hook\
+        \ sandbox does not install packages.\n\"\"\"\n\nimport json\nimport os\nimport\
+        \ sys\nimport urllib.error\nimport urllib.parse\nimport urllib.request\n\n\
+        FUNCTION_URL = \"https://func-agt-grubify-agt01.azurewebsites.net\".rstrip(\"\
+        /\")\nAUTH_MODE = \"none\"\nCLIENT_ID = \"\"\nFUNCTION_KEY = \"\"\nHOOK_TYPE\
+        \ = \"post_tool_audit\"\nTIMEOUT_SECONDS = 20\n\n\ndef _read_context():\n\
+        \    raw = sys.stdin.read()\n    if not raw.strip():\n        return {}\n\
+        \    try:\n        return json.loads(raw)\n    except Exception:\n       \
+        \ return {\"raw\": raw}\n\n\ndef _allow(message):\n    return {\"allowed\"\
+        : True, \"message\": message}\n\n\ndef _block(message):\n    return {\"allowed\"\
+        : False, \"message\": message}\n\n\ndef _token_from_imds():\n    resource\
+        \ = CLIENT_ID or \"https://management.azure.com/\"\n    query = urllib.parse.urlencode({\"\
+        api-version\": \"2018-02-01\", \"resource\": resource})\n    request = urllib.request.Request(\n\
+        \        \"http://169.254.169.254/metadata/identity/oauth2/token?\" + query,\n\
+        \        headers={\"Metadata\": \"true\"},\n    )\n    with urllib.request.urlopen(request,\
+        \ timeout=TIMEOUT_SECONDS) as response:\n        payload = json.loads(response.read().decode(\"\
+        utf-8\"))\n    return payload[\"access_token\"]\n\n\ndef _headers():\n   \
+        \ headers = {\"Content-Type\": \"application/json\"}\n    auth_mode = AUTH_MODE.lower()\n\
+        \    if auth_mode in {\"managed_identity\", \"mi\"}:\n        headers[\"Authorization\"\
+        ] = \"Bearer \" + _token_from_imds()\n    elif auth_mode in {\"function_key\"\
+        , \"key\"} and FUNCTION_KEY:\n        headers[\"x-functions-key\"] = FUNCTION_KEY\n\
+        \    return headers\n\n\ndef _call_governance(context):\n    body = json.dumps({\"\
+        hook_type\": HOOK_TYPE, \"context\": context}).encode(\"utf-8\")\n    request\
+        \ = urllib.request.Request(\n        FUNCTION_URL + \"/api/hook\",\n     \
+        \   data=body,\n        headers=_headers(),\n        method=\"POST\",\n  \
+        \  )\n    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as\
+        \ response:\n        return json.loads(response.read().decode(\"utf-8\"))\n\
+        \n\ndef main():\n    context = _read_context()\n    if not FUNCTION_URL or\
+        \ FUNCTION_URL.startswith(\"##\"):\n        print(json.dumps(_allow(\"[AGT]\
+        \ Governance endpoint is not configured.\")))\n        return\n\n    try:\n\
+        \        decision = _call_governance(context)\n    except urllib.error.HTTPError\
+        \ as exc:\n        details = exc.read().decode(\"utf-8\", errors=\"replace\"\
+        )[:500]\n        if HOOK_TYPE == \"pre_tool_policy\":\n            print(json.dumps(_block(\"\
+        [AGT] Governance service rejected the request: \" + details)))\n        else:\n\
+        \            print(json.dumps(_allow(\"[AGT] Governance service error: \"\
+        \ + details)))\n        return\n    except Exception as exc:\n        if HOOK_TYPE\
+        \ == \"pre_tool_policy\":\n            print(json.dumps(_block(\"[AGT] Governance\
+        \ service unavailable: \" + str(exc))))\n        else:\n            print(json.dumps(_allow(\"\
+        [AGT] Governance service unavailable: \" + str(exc))))\n        return\n\n\
+        \    print(json.dumps(decision))\n\n\nif __name__ == \"__main__\":\n    main()\n"
+      matcher: '*'
+      timeout: 30
+      failMode: Allow
+    Stop:
+    - type: Prompt
+      script: "#!/usr/bin/env python3\n\"\"\"\nSRE Agent hook bridge to the Grubify\
+        \ AGT governance endpoint.\n\nThis file is embedded inline into SRE Agent\
+        \ hook configuration by the deploy\nscript. Keep it stdlib-only; the SRE hook\
+        \ sandbox does not install packages.\n\"\"\"\n\nimport json\nimport os\nimport\
+        \ sys\nimport urllib.error\nimport urllib.parse\nimport urllib.request\n\n\
+        FUNCTION_URL = \"https://func-agt-grubify-agt01.azurewebsites.net\".rstrip(\"\
+        /\")\nAUTH_MODE = \"none\"\nCLIENT_ID = \"\"\nFUNCTION_KEY = \"\"\nHOOK_TYPE\
+        \ = \"stop_quality\"\nTIMEOUT_SECONDS = 20\n\n\ndef _read_context():\n   \
+        \ raw = sys.stdin.read()\n    if not raw.strip():\n        return {}\n   \
+        \ try:\n        return json.loads(raw)\n    except Exception:\n        return\
+        \ {\"raw\": raw}\n\n\ndef _allow(message):\n    return {\"allowed\": True,\
+        \ \"message\": message}\n\n\ndef _block(message):\n    return {\"allowed\"\
+        : False, \"message\": message}\n\n\ndef _token_from_imds():\n    resource\
+        \ = CLIENT_ID or \"https://management.azure.com/\"\n    query = urllib.parse.urlencode({\"\
+        api-version\": \"2018-02-01\", \"resource\": resource})\n    request = urllib.request.Request(\n\
+        \        \"http://169.254.169.254/metadata/identity/oauth2/token?\" + query,\n\
+        \        headers={\"Metadata\": \"true\"},\n    )\n    with urllib.request.urlopen(request,\
+        \ timeout=TIMEOUT_SECONDS) as response:\n        payload = json.loads(response.read().decode(\"\
+        utf-8\"))\n    return payload[\"access_token\"]\n\n\ndef _headers():\n   \
+        \ headers = {\"Content-Type\": \"application/json\"}\n    auth_mode = AUTH_MODE.lower()\n\
+        \    if auth_mode in {\"managed_identity\", \"mi\"}:\n        headers[\"Authorization\"\
+        ] = \"Bearer \" + _token_from_imds()\n    elif auth_mode in {\"function_key\"\
+        , \"key\"} and FUNCTION_KEY:\n        headers[\"x-functions-key\"] = FUNCTION_KEY\n\
+        \    return headers\n\n\ndef _call_governance(context):\n    body = json.dumps({\"\
+        hook_type\": HOOK_TYPE, \"context\": context}).encode(\"utf-8\")\n    request\
+        \ = urllib.request.Request(\n        FUNCTION_URL + \"/api/hook\",\n     \
+        \   data=body,\n        headers=_headers(),\n        method=\"POST\",\n  \
+        \  )\n    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as\
+        \ response:\n        return json.loads(response.read().decode(\"utf-8\"))\n\
+        \n\ndef main():\n    context = _read_context()\n    if not FUNCTION_URL or\
+        \ FUNCTION_URL.startswith(\"##\"):\n        print(json.dumps(_allow(\"[AGT]\
+        \ Governance endpoint is not configured.\")))\n        return\n\n    try:\n\
+        \        decision = _call_governance(context)\n    except urllib.error.HTTPError\
+        \ as exc:\n        details = exc.read().decode(\"utf-8\", errors=\"replace\"\
+        )[:500]\n        if HOOK_TYPE == \"pre_tool_policy\":\n            print(json.dumps(_block(\"\
+        [AGT] Governance service rejected the request: \" + details)))\n        else:\n\
+        \            print(json.dumps(_allow(\"[AGT] Governance service error: \"\
+        \ + details)))\n        return\n    except Exception as exc:\n        if HOOK_TYPE\
+        \ == \"pre_tool_policy\":\n            print(json.dumps(_block(\"[AGT] Governance\
+        \ service unavailable: \" + str(exc))))\n        else:\n            print(json.dumps(_allow(\"\
+        [AGT] Governance service unavailable: \" + str(exc))))\n        return\n\n\
+        \    print(json.dumps(decision))\n\n\nif __name__ == \"__main__\":\n    main()\n"
+      timeout: 30
+      failMode: Allow
