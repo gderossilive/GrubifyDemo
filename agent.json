@@ -1,0 +1,29 @@
+{
+  "schema": "grubify-sre-agent-v2.agent/v1",
+  "identity": {
+    "agentName": "sre-agent-grubify",
+    "resourceGroup": "",
+    "location": "swedencentral",
+    "targetResourceGroups": []
+  },
+  "access": {
+    "accessLevel": "High",
+    "actionMode": "autonomous"
+  },
+  "governance": {
+    "functionUrl": "",
+    "authMode": "none",
+    "clientId": "",
+    "functionKey": ""
+  },
+  "content": {
+    "knowledgePath": "knowledge",
+    "agentsPath": "sre-config/agents",
+    "agents": [
+      "code-analyzer",
+      "issue-triager",
+      "incident-handler-core",
+      "incident-handler-agt"
+    ]
+  }
+}

@@ -17,7 +17,7 @@ The deploy script renders Teams identifiers from local environment variables:
 - `TEAMS_CLIENT_ID`: optional app registration client ID when connector auth supports automation.
 - `TEAMS_CLIENT_SECRET`: optional app registration client secret when connector auth supports automation.
 
-The portal-created connector observed on the reference `rg-grubify-sre` agent appears as service `Microsoft Teams` and exposes `PostTeamsMessage`, `GetTeamsMessages`, and `ReplyToTeamsMessage`. If an app registration is required during connector setup, it should have the Microsoft Graph application permission required to send channel messages, such as `ChannelMessage.Send`, and admin consent must be granted.
+The portal-created connector observed on the validated `grubify-agt` agent appears as connector type `Teams` and exposes `PostTeamsMessage`, `GetTeamsMessages`, and `ReplyToTeamsMessage`. If an app registration is required during connector setup, it should have the Microsoft Graph application permission required to send channel messages, such as `ChannelMessage.Send`, and admin consent must be granted.
 
 ## Message Content
 
@@ -56,10 +56,10 @@ curl -s "$AGENT_ENDPOINT/api/v1/extendedAgent/systemtools" \
   -H "Authorization: Bearer $AZURESRE_TOKEN" | grep -i teams
 ```
 
-Expected old-agent built-in Teams tools were:
+Expected Teams tools are:
 
 - `GetTeamsMessages`
 - `PostTeamsMessage`
 - `ReplyToTeamsMessage`
 
-If those built-in tools are not present, verify the Microsoft Teams connector in the SRE Agent portal under Builder > Connectors. The current preview API can list connectors but rejects `kind: DataConnector` YAML with `Unsupported kind: DataConnector`, so this connector must be created or authenticated in the portal.
+If those tools are not present, verify the Microsoft Teams connector in the SRE Agent portal under Builder > Connectors. The current preview API can list connectors but rejects `kind: DataConnector` YAML with `Unsupported kind: DataConnector`, so this connector must be created or authenticated in the portal.

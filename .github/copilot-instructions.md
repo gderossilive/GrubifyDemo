@@ -5,7 +5,7 @@
 This is a modern food delivery application with a React TypeScript frontend and .NET backend, designed for deployment to Azure Container Apps.
 
 ## Tech Stack
-- **Frontend**: React 18 with TypeScript, Material-UI, React Router
+- **Frontend**: React 19 with TypeScript, Material-UI, React Router
 - **Backend**: .NET 9 Web API with Controllers
 - **Deployment**: Azure Container Apps via Azure Developer CLI (azd)
 - **Infrastructure**: Bicep templates

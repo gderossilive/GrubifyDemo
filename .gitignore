@@ -3,6 +3,12 @@ bin/
 obj/
 out/
 
+# Deployment tooling
+!/bin/
+!/bin/*.py
+bin/__pycache__/
+infra/main.json
+
 # User-specific files
 *.suo
 *.user

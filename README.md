@@ -12,7 +12,7 @@ A modern food delivery application built with React TypeScript frontend and .NET
 
 ## 🏗️ Architecture
 
-- **Frontend**: React 18 + TypeScript + Material-UI
+- **Frontend**: React 19 + TypeScript + Material-UI
 - **Backend**: .NET 9 Web API with RESTful endpoints
 - **Infrastructure**: Azure Container Apps + Azure Container Registry (ACR)
 - **Deployment**: Azure Developer CLI (azd) with remote ACR builds — no local Docker required
@@ -66,13 +66,12 @@ azd env set AZURE_LOCATION swedencentral
 azd up
 ```
 
-This creates:
-- **Resource Group**: `rg-grubify-app`
-- **Container Registry**: `crgrubify` — images are built here via ACR Tasks
-- **Container Apps Environment**: `cae-grubify`
-- **API Container App**: `ca-grubify-api`
-- **Frontend Container App**: `ca-grubify-frontend`
-- **Log Analytics Workspace**: `log-grubify`
+This creates the application resource group and app resources for the current
+azd environment. Resource names include the five-character `resourceToken`
+derived from the environment name unless you override it. For the validated
+`grubify-agt` demo environment, the app resource group is
+`rg-grubify-app-agt01`, the API Container App is `ca-grubify-api-agt01`, and
+the frontend Container App is `ca-grubify-frontend-agt01`.
 
 ### 4. Deploy the SRE Agent
 
@@ -103,8 +102,21 @@ Then run:
 ./scripts/deploy-sre-agent.sh
 ```
 
+For the validated `grubify-agt` environment, run with the matching app/SRE
+resource groups and governance function URL:
+
+```bash
+GRUBIFY_RESOURCE_TOKEN=agt01 \
+RESOURCE_TOKEN=agt01 \
+APP_RG=rg-grubify-app-agt01 \
+SRE_RG=rg-grubify-sre-agt01 \
+AGT_FUNCTION_URL=https://func-agt-grubify-agt01.azurewebsites.net \
+INCIDENT_HANDLER_AGENT=incident-handler-agt \
+./scripts/deploy-sre-agent.sh
+```
+
 This creates:
-- **SRE Resource Group**: `rg-grubify-sre`
+- **SRE Resource Group**: `rg-grubify-sre-${resourceToken}`
 - **SRE Agent**: `sre-agent-grubify`
 - **Action Group**: `ag-sre-grubify`
 - **HTTP 5xx Alert**: `alert-http-5xx-grubify`
@@ -114,13 +126,14 @@ This creates:
 - **ServiceNow response filter**: `grubify-http-errors`, routed to `incident-handler-agt`
 
 The deployment uploads all Markdown files in `knowledge/` and checks whether
-they are indexed by SRE Agent memory. It also deploys a fixed sub-agent
-allow-list: `code-analyzer`, `issue-triager`, `incident-handler-core`, and
-`incident-handler-agt`. The governed `incident-handler-agt` is the default
-ServiceNow response-plan target; `incident-handler-core.yaml` remains available
-as an ungoverned fallback. `incident-handler-full.yaml` is kept in the repo as
-a reserved/manual variant and is intentionally skipped because it shares the
-same `spec.name` as the core handler.
+they are indexed by SRE Agent memory. It also applies a fixed sub-agent config
+set: `code-analyzer`, `issue-triager`, `incident-handler-core.yaml`, and
+`incident-handler-agt.yaml`. The core YAML registers as `incident-handler`
+because its `spec.name` is `incident-handler`; the governed
+`incident-handler-agt` is the default ServiceNow response-plan target.
+`incident-handler-full.yaml` is kept in the repo as a reserved/manual variant
+and is intentionally skipped because it shares the same `spec.name` as the core
+handler.
 
 The AGT governance Function App is deployed by azd as the `governance` service.
 Verify it before deploying SRE content:
@@ -155,12 +168,12 @@ SERVICENOW_CATEGORY=software
 ```
 
 The script deploys Logic App
-`la-grubify-servicenow-handler` into `rg-grubify-sre`, stores its callback URL
-in `.azure/servicenow-handler-url`, and wires `ag-sre-grubify` with a Logic App
-receiver named `sre-logic-app`. The Logic App creates the ServiceNow incident,
-then acknowledges the Azure Monitor alert with a comment such as `Routed to
-ServiceNow incident INC0012345.` It does not forward an enriched payload to the
-SRE Agent.
+`la-grubify-servicenow-handler` into `rg-grubify-sre-${resourceToken}`, stores
+its callback URL in `.azure/servicenow-handler-url`, and wires
+`ag-sre-grubify` with a Logic App receiver named `sre-logic-app`. The Logic App
+creates the ServiceNow incident, then acknowledges the Azure Monitor alert with
+a comment such as `Routed to ServiceNow incident INC0012345.` It does not
+forward an enriched payload to the SRE Agent.
 
 The SRE Agent is configured with native `ServiceNow` incident management. The
 deployment validates the ServiceNow endpoint through the SRE backend and saves
@@ -173,6 +186,12 @@ which retrieves details with `GetServiceNowIncident`, has each tool call checked
 by AGT governance hooks, and updates the ServiceNow record throughout the
 lifecycle.
 
+The deploy script sends `providerType: servicenow` when saving indexing
+configuration to `/api/v2/incidents/indexing/servicenow/configuration`. The
+current SRE API accepts that PUT, but its GET response is ServiceNow-specific
+and omits `providerType`; verify the saved state by checking that
+`assignmentGroup` is non-empty and `lookbackDays` has the expected value.
+
 Set `ENABLE_SERVICENOW_HANDLER=false` only when you intentionally want the
 direct Azure Monitor -> SRE Agent webhook fallback for local testing.
 
@@ -180,13 +199,13 @@ Verify the ServiceNow route:
 
 ```bash
 az monitor action-group show \
-	--resource-group rg-grubify-sre \
+	--resource-group rg-grubify-sre-<token> \
 	--name ag-sre-grubify \
 	--query "{logicAppReceivers:logicAppReceivers[].{name:name,useCommonAlertSchema:useCommonAlertSchema},webhookCount:length(webhookReceivers)}" \
 	-o table
 
 az rest --method get \
-	--url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/rg-grubify-sre/providers/Microsoft.Logic/workflows/la-grubify-servicenow-handler/runs?api-version=2016-06-01&\$top=5" \
+	--url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/rg-grubify-sre-<token>/providers/Microsoft.Logic/workflows/la-grubify-servicenow-handler/runs?api-version=2016-06-01&\$top=5" \
 	--query "value[].{status:properties.status,startTime:properties.startTime,endTime:properties.endTime}" \
 	-o table
 ```
@@ -217,8 +236,9 @@ Teams connector YAML returns `Unsupported kind: DataConnector`. Because of that,
 the script verifies whether a Microsoft Teams connector and Teams tools exist,
 but it does not silently create or authenticate the connector. Register and
 authenticate the Teams connector in the SRE Agent portal when required, then
-rerun the script to verify it. A healthy portal-created connector exposes tools
-such as `PostTeamsMessage`, `GetTeamsMessages`, and `ReplyToTeamsMessage`.
+rerun the script to verify it. The validated `grubify-agt` environment has a
+Teams connector and exposes `PostTeamsMessage`, `GetTeamsMessages`, and
+`ReplyToTeamsMessage`.
 
 Verify connector and tool state:
 
@@ -239,7 +259,9 @@ curl -s "$AGENT_ENDPOINT/api/v1/extendedAgent/systemtools" \
 Now you have:
 - ✅ **Frontend deployed** and working
 - ✅ **Backend deployed** and working
-- ✅ **Infrastructure configured** for testing scenarios
+- ✅ **AGT governance Function App** deployed as the azd `governance` service
+- ✅ **Knowledge files** uploaded and indexed in SRE Agent memory
+- ✅ **ServiceNow-backed incident flow** configured for HTTP 5xx scenarios
 
 **SRE Agent Setup:**
 1. **Deploy agent** with `./scripts/deploy-sre-agent.sh`

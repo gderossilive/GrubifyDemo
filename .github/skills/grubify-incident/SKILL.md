@@ -25,9 +25,13 @@ cd /workspaces/GrubifyDemo
 ## Step 1: Source environment values
 
 ```bash
-APP_URL="https://$(az containerapp show -g rg-grubify-app-ids7x -n ca-grubify-api-ids7x --query properties.configuration.ingress.fqdn -o tsv)"
-SRE_RG="rg-grubify-sre-sn-test-05191511"
+APP_RG="rg-grubify-app-agt01"
+API_CA="ca-grubify-api-agt01"
+SRE_RG="rg-grubify-sre-agt01"
 AGENT="sre-agent-grubify"
+LOGIC_APP="la-grubify-servicenow-handler"
+ALERT="alert-http-5xx-grubify"
+APP_URL="https://$(az containerapp show -g "$APP_RG" -n "$API_CA" --query properties.configuration.ingress.fqdn -o tsv)"
 ```
 
 All values must be set. Use environment-specific resource group names if your deployment uses a different token.
@@ -37,7 +41,7 @@ All values must be set. Use environment-specific resource group names if your de
 ### 2a) Grubify is healthy
 
 ```bash
-APP_URL="https://$(az containerapp show -g rg-grubify-app-ids7x -n ca-grubify-api-ids7x --query properties.configuration.ingress.fqdn -o tsv)"
+APP_URL="https://$(az containerapp show -g "$APP_RG" -n "$API_CA" --query properties.configuration.ingress.fqdn -o tsv)"
 curl -s -o /dev/null -w "Restaurants: HTTP %{http_code}\n" "${APP_URL}/api/restaurants"
 ```
 
@@ -53,6 +57,18 @@ az resource show -g "$SRE_RG" -n "$AGENT" \
 
 Must show `mode: autonomous`.
 
+### 2c) Alert and ServiceNow receiver are wired
+
+```bash
+az monitor metrics alert show -g "$SRE_RG" -n "$ALERT" \
+  --query '{enabled:enabled,severity:severity,actions:actions[].actionGroupId}' -o json
+
+az logic workflow show -g "$SRE_RG" -n "$LOGIC_APP" \
+  --query '{state:state,provisioningState:provisioningState}' -o json
+```
+
+The alert must be enabled and the Logic App must be enabled/succeeded.
+
 ## Step 3: Trigger the memory leak
 
 ```bash
@@ -64,9 +80,10 @@ for i in $(seq 1 200); do
 done | sort | uniq -c
 ```
 
-This sends 200 rapid POST requests to `/api/cart/demo-user/items`, flooding the in-memory cart
-until the container approaches its 1Gi memory limit. Expect errors in later requests as memory
-pressure builds.
+This sends 200 rapid POST requests to `/api/cart/demo-user/items`, retaining about 10 MB per
+request in the API process. The burst may initially return HTTP 200 while memory pressure and
+Azure Monitor metrics catch up; the important signal is the request spike followed by HTTP 5xx,
+container restart, or degraded behavior during the alert evaluation window.
 
 ## Step 4: Wait for alert + agent investigation
 
@@ -90,7 +107,7 @@ pressure builds.
 After the agent remediates:
 
 ```bash
-APP_URL="https://$(az containerapp show -g rg-grubify-app-ids7x -n ca-grubify-api-ids7x --query properties.configuration.ingress.fqdn -o tsv)"
+APP_URL="https://$(az containerapp show -g "$APP_RG" -n "$API_CA" --query properties.configuration.ingress.fqdn -o tsv)"
 curl -s -o /dev/null -w "Restaurants: HTTP %{http_code}\n" "${APP_URL}/api/restaurants"
 ```
 
@@ -101,15 +118,15 @@ Should return HTTP 200.
 To manually reset the demo without waiting for the agent, restart the active revision:
 
 ```bash
-RG="rg-grubify-app-ids7x"
-CA_NAME="ca-grubify-api-ids7x"
+RG="$APP_RG"
+CA_NAME="$API_CA"
 REVISION=$(az containerapp revision list -g "$RG" -n "$CA_NAME" --query '[0].name' -o tsv)
 az containerapp revision restart -g "$RG" -n "$CA_NAME" --revision "$REVISION"
 ```
 
 ## Success criteria
 
-- [ ] The cart POST burst completes with errors in the final requests (memory pressure)
+- [ ] The cart POST burst creates a request/memory-pressure spike
 - [ ] Logic App creates a ServiceNow incident
 - [ ] SRE Agent portal shows an incident being investigated
 - [ ] Agent identifies memory leak / OOM as root cause

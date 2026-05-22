@@ -26,6 +26,48 @@ param frontendImage string = ''
 @description('Resource ID of an existing Container Apps Environment to reuse. Leave empty to provision a new one.')
 param existingContainerAppsEnvironmentId string = ''
 
+@description('Name of the resource group for SRE Agent resources.')
+param sreResourceGroupName string = ''
+
+@description('SRE Agent ARM resource name.')
+param sreAgentName string = 'sre-agent-grubify'
+
+@description('SRE Agent user-assigned managed identity name.')
+param sreIdentityName string = 'id-sre-grubify'
+
+@description('SRE Agent Log Analytics workspace name.')
+param sreLogAnalyticsWorkspaceName string = 'law-sre-grubify'
+
+@description('SRE Agent Application Insights component name.')
+param sreApplicationInsightsName string = 'appi-sre-grubify'
+
+@allowed([
+  'Low'
+  'Medium'
+  'High'
+])
+@description('SRE Agent action access level.')
+param sreAccessLevel string = 'High'
+
+@allowed([
+  'autonomous'
+  'copilot'
+])
+@description('SRE Agent action mode.')
+param sreActionMode string = 'autonomous'
+
+@description('Additional resource IDs registered as SRE Agent managed resources.')
+param sreTargetResourceIds array = []
+
+@description('ARM-supported SRE Agent connector definitions.')
+param sreConnectors array = []
+
+@description('Incident management configuration for the SRE Agent.')
+param sreIncidentManagementConfiguration object = {
+  type: 'AzMonitor'
+  connectionName: 'azmonitor'
+}
+
 var abbrs = loadJsonContent('abbreviations.json')
 var tags = { 'azd-env-name': environmentName }
 var useExistingEnv = !empty(existingContainerAppsEnvironmentId)
@@ -34,10 +76,18 @@ var existingEnvName = useExistingEnv ? last(split(existingContainerAppsEnvironme
 var governanceFunctionName = 'func-agt-grubify-${resourceToken}'
 var governanceStorageName = 'stagtgrubify${resourceToken}'
 var governancePlanName = 'plan-agt-grubify-${resourceToken}'
+var monitoringReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
+var contributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
 
 // Organize resources in a resource group
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: !empty(resourceGroupName) ? resourceGroupName : 'rg-grubify-app-${resourceToken}'
+  location: location
+  tags: tags
+}
+
+resource sreRg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
+  name: !empty(sreResourceGroupName) ? sreResourceGroupName : 'rg-grubify-sre-${resourceToken}'
   location: location
   tags: tags
 }
@@ -143,11 +193,88 @@ module governanceFunction 'core/host/governance-function.bicep' = {
   }
 }
 
+// SRE Agent monitoring resources
+module sreObservability 'core/host/sre-observability.bicep' = {
+  name: 'sre-observability'
+  scope: sreRg
+  params: {
+    location: location
+    logAnalyticsWorkspaceName: sreLogAnalyticsWorkspaceName
+    applicationInsightsName: sreApplicationInsightsName
+    tags: tags
+  }
+}
+
+// SRE Agent ARM resource and managed identity
+module sreAgent 'core/host/sre-agent.bicep' = {
+  name: 'sre-agent'
+  scope: sreRg
+  params: {
+    location: location
+    agentName: sreAgentName
+    identityName: sreIdentityName
+    targetResourceIds: union([
+      rg.id
+    ], sreTargetResourceIds)
+    appInsightsAppId: sreObservability.outputs.applicationInsightsAppId
+    appInsightsResourceId: sreObservability.outputs.applicationInsightsId
+    appInsightsConnectionString: sreObservability.outputs.applicationInsightsConnectionString
+    accessLevel: sreAccessLevel
+    actionMode: sreActionMode
+    incidentManagementConfiguration: sreIncidentManagementConfiguration
+    tags: tags
+  }
+}
+
+module sreIdentityAppMonitoringReader 'core/host/role-assignment.bicep' = {
+  name: 'sre-identity-app-monitoring-reader'
+  scope: rg
+  params: {
+    name: guid(rg.id, sreIdentityName, monitoringReaderRoleDefinitionId)
+    roleDefinitionId: monitoringReaderRoleDefinitionId
+    principalId: sreAgent.outputs.identityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+module sreIdentityAppContributor 'core/host/role-assignment.bicep' = {
+  name: 'sre-identity-app-contributor'
+  scope: rg
+  params: {
+    name: guid(rg.id, sreIdentityName, contributorRoleDefinitionId)
+    roleDefinitionId: contributorRoleDefinitionId
+    principalId: sreAgent.outputs.identityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+module sreIdentitySreMonitoringReader 'core/host/role-assignment.bicep' = {
+  name: 'sre-identity-sre-monitoring-reader'
+  scope: sreRg
+  params: {
+    name: guid(sreRg.id, sreIdentityName, monitoringReaderRoleDefinitionId)
+    roleDefinitionId: monitoringReaderRoleDefinitionId
+    principalId: sreAgent.outputs.identityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ARM-supported SRE Agent connector child resources
+module sreAgentExtensions 'core/host/sre-agent-extensions.bicep' = if (!empty(sreConnectors)) {
+  name: 'sre-agent-extensions'
+  scope: sreRg
+  params: {
+    agentName: sreAgent.outputs.agentName
+    connectors: sreConnectors
+  }
+}
+
 // App outputs
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
 output AZURE_RESOURCE_GROUP string = rg.name
 output RESOURCE_GROUP_ID string = rg.id
+output SRE_AGENT_RESOURCE_GROUP string = sreRg.name
 
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerRegistry.outputs.loginServer
 output AZURE_CONTAINER_REGISTRY_NAME string = containerRegistry.outputs.name
@@ -158,3 +285,13 @@ output AGT_FUNCTION_URL string = governanceFunction.outputs.functionAppUrl
 output AGT_FUNCTION_NAME string = governanceFunction.outputs.functionAppName
 output AGT_FUNCTION_PRINCIPAL_ID string = governanceFunction.outputs.functionAppPrincipalId
 output SERVICE_GOVERNANCE_NAME string = governanceFunction.outputs.functionAppName
+output SRE_AGENT_NAME string = sreAgent.outputs.agentName
+output SRE_AGENT_ID string = sreAgent.outputs.agentId
+output SRE_AGENT_ENDPOINT string = sreAgent.outputs.agentEndpoint
+output SRE_AGENT_PRINCIPAL_ID string = sreAgent.outputs.agentPrincipalId
+output SRE_AGENT_IDENTITY_ID string = sreAgent.outputs.identityId
+output SRE_AGENT_IDENTITY_NAME string = sreAgent.outputs.identityName
+output SRE_AGENT_IDENTITY_PRINCIPAL_ID string = sreAgent.outputs.identityPrincipalId
+output SRE_LOG_ANALYTICS_WORKSPACE_ID string = sreObservability.outputs.logAnalyticsWorkspaceId
+output SRE_APP_INSIGHTS_RESOURCE_ID string = sreObservability.outputs.applicationInsightsId
+output SRE_APP_INSIGHTS_APP_ID string = sreObservability.outputs.applicationInsightsAppId

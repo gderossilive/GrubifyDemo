@@ -31,11 +31,12 @@ Do not assume rich application telemetry in Application Insights for the Grubify
 ### Deployed Application Shape
 
 - Backend: ASP.NET Core Web API
-- Frontend: React
-- Backend Container App name pattern: `ca-grubify-${uniqueSuffix}`
-- Frontend Container App name pattern: `ca-grubify-fe-${uniqueSuffix}`
-- Container Apps environment name pattern: `cae-${uniqueSuffix}`
-- Resource group name pattern: `rg-${environmentName}`
+- Frontend: React 19
+- Backend Container App name pattern: `ca-grubify-api-${resourceToken}`
+- Frontend Container App name pattern: `ca-grubify-frontend-${resourceToken}`
+- Container Apps environment name pattern: `cae-${resourceToken}` unless an existing environment is supplied
+- App resource group name pattern: `rg-grubify-app-${resourceToken}`
+- SRE resource group name pattern: `rg-grubify-sre-${resourceToken}`
 
 ### Active Alert Configuration
 
@@ -46,14 +47,14 @@ The demo deploys one primary alert for this scenario:
 - Metric: `Requests`
 - Dimension: `statusCodeCategory = 5xx`
 - Threshold: `> 5` in `5` minutes
-- Severity: `3`
-- Alert name pattern: `alert-http-5xx-${environmentName}`
+- Severity: `2`
+- Alert name: `alert-http-5xx-grubify`
 
 ### Most Likely Root Cause In This Lab
 
 The primary intentional failure path is in:
 
-- `src/grubify/GrubifyApi/Controllers/CartController.cs`
+- `GrubifyApi/Controllers/CartController.cs`
 
 The `POST /api/cart/{userId}/items` endpoint allocates and retains a new `10 MB` byte array on every request:
 
@@ -100,22 +101,21 @@ Resolve the current environment values first. The `azd` environment contains app
 cd /workspaces/GrubifyDemo
 
 azd env get-value AZURE_RESOURCE_GROUP
-azd env get-value CONTAINER_APP_NAME
-azd env get-value CONTAINER_APP_URL
-azd env get-value FRONTEND_APP_NAME
+azd env get-value API_BASE_URL
+azd env get-value FRONTEND_URL
 ```
 
 You should expect values shaped like:
 
-- Resource group: `rg-<environmentName>`
-- Backend app: `ca-grubify-<suffix>`
-- Frontend app: `ca-grubify-fe-<suffix>`
+- Resource group: `rg-grubify-app-<token>`
+- Backend app: `ca-grubify-api-<token>`
+- Frontend app: `ca-grubify-frontend-<token>`
 
 Get the backend resource ID because it is needed for metrics queries:
 
 ```bash
 RG=$(azd env get-value AZURE_RESOURCE_GROUP)
-APP=$(azd env get-value CONTAINER_APP_NAME)
+APP=$(az containerapp list -g "$RG" --query "[?contains(name, 'api')].name | [0]" -o tsv)
 
 az containerapp show -g "$RG" -n "$APP" --query id -o tsv
 ```
@@ -127,7 +127,7 @@ az containerapp show -g "$RG" -n "$APP" --query id -o tsv
 Do not use `/health` or `/api/menu` for this lab.
 
 ```bash
-APP_URL=$(azd env get-value CONTAINER_APP_URL)
+APP_URL=$(azd env get-value API_BASE_URL)
 
 curl -i "$APP_URL/weatherforecast"
 curl -i "$APP_URL/api/restaurants"

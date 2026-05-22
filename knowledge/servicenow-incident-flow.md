@@ -75,6 +75,12 @@ ServiceNow incident indexing must also be configured through the SRE backend at 
 - `assignmentGroup`: ServiceNow group sys_id or display value
 - `lookbackDays`: default `30`
 
+The deploy script includes `providerType: servicenow` in the PUT body. The
+current SRE API accepts that value, but the ServiceNow-specific GET response
+omits `providerType` and returns fields such as `assignmentGroup`,
+`lookbackDays`, `categories`, `priorities`, and timestamps. Treat a non-empty
+`assignmentGroup` plus the expected `lookbackDays` as the readback verification.
+
 If `SERVICENOW_ASSIGNMENT_GROUP` is empty, `deploy-sre-agent.sh` tries common groups such as `Software`, `Service Desk`, `Incident Management`, and `Help Desk`.
 
 ## Troubleshooting
@@ -95,7 +101,7 @@ Confirm the action group Logic App receiver:
 
 ```bash
 az monitor action-group show \
-  --resource-group rg-grubify-sre \
+  --resource-group rg-grubify-sre-<token> \
   --name ag-sre-grubify \
   --query "{logicAppReceivers:logicAppReceivers[].{name:name,useCommonAlertSchema:useCommonAlertSchema,resourceId:resourceId},webhookCount:length(webhookReceivers)}" \
   -o table
@@ -105,7 +111,7 @@ Check recent Logic App runs:
 
 ```bash
 az rest --method get \
-  --url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/rg-grubify-sre/providers/Microsoft.Logic/workflows/la-grubify-servicenow-handler/runs?api-version=2016-06-01&\$top=5" \
+  --url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/rg-grubify-sre-<token>/providers/Microsoft.Logic/workflows/la-grubify-servicenow-handler/runs?api-version=2016-06-01&\$top=5" \
   --query "value[].{status:properties.status,startTime:properties.startTime,endTime:properties.endTime}" \
   -o table
 ```
@@ -114,6 +120,6 @@ If no ServiceNow incident is created:
 
 1. Verify `SERVICENOW_INSTANCE` or `SERVICENOW_INSTANCE_URL`, `SERVICENOW_USERNAME`, and `SERVICENOW_PASSWORD` in `.env`.
 2. Verify the SRE portal ServiceNow validator reports the connection as valid.
-3. Verify ServiceNow incident indexing has a non-empty assignment group.
+3. Verify ServiceNow incident indexing has a non-empty assignment group and the expected lookback window.
 4. Verify `ag-sre-grubify` has a Logic App receiver. If the alert fired while the action group was empty, Azure Monitor will not replay that old notification; wait for a new alert transition or use an action-group test notification.
 5. Rerun `./scripts/deploy-sre-agent.sh` after fixing configuration.

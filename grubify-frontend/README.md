@@ -1,10 +1,10 @@
 # Grubify Frontend
 
-React 18 + TypeScript frontend for the Grubify food delivery app, built with Material-UI and deployed to Azure Container Apps.
+React 19 + TypeScript frontend for the Grubify food delivery app, built with Material-UI and deployed to Azure Container Apps.
 
 ## Tech Stack
 
-- React 18 + TypeScript
+- React 19 + TypeScript
 - Material-UI (MUI v7)
 - React Router v6
 - Axios for API calls

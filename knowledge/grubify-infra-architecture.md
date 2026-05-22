@@ -35,25 +35,27 @@ Container images are built remotely with Azure Container Registry Tasks, so the 
 
 ### Azure Resource Topology
 
-`infra/main.bicep` is subscription-scoped and creates a dedicated resource group:
-
-- Resource group name pattern: `rg-${environmentName}`
-
-It then deploys `resources.bicep`, which creates these main resources using generated names based on `uniqueString(resourceGroup().id, environmentName)`:
+`infra/main.bicep` is subscription-scoped and creates a dedicated application
+resource group. By default, resource names use a five-character
+`resourceToken` derived from the azd environment name, or a caller-supplied
+`GRUBIFY_RESOURCE_TOKEN`/`RESOURCE_TOKEN` during SRE configuration.
 
 | Resource | Azure type | Naming pattern | Purpose |
 |----------|------------|----------------|---------|
-| Resource group | `Microsoft.Resources/resourceGroups` | `rg-${environmentName}` | Isolates the demo |
-| Log Analytics workspace | `Microsoft.OperationalInsights/workspaces` | `law-${uniqueSuffix}` | Stores Container Apps logs |
-| Application Insights | `Microsoft.Insights/components` | `appi-${uniqueSuffix}` | Stores SRE Agent telemetry |
-| User-assigned managed identity | `Microsoft.ManagedIdentity/userAssignedIdentities` | `id-sre-${uniqueSuffix}` | Agent action and knowledge graph identity |
-| Container Apps environment | `Microsoft.App/managedEnvironments` | `cae-${uniqueSuffix}` | Shared environment for backend and frontend |
-| Backend Container App | `Microsoft.App/containerApps` | `ca-grubify-${uniqueSuffix}` | Hosts the Grubify API |
-| Frontend Container App | `Microsoft.App/containerApps` | `ca-grubify-fe-${uniqueSuffix}` | Hosts the React frontend |
-| Azure Container Registry | `Microsoft.ContainerRegistry/registries` | `acr${containerAppName}` with hyphens removed | Remote image builds |
-| SRE Agent | `Microsoft.App/agents` | `sre-agent-${uniqueSuffix}` | Incident detection and remediation |
-| Action Group | `Microsoft.Insights/actionGroups` | `ag-sre-lab-${environmentName}` | Alert action target |
-| Metric alert | `Microsoft.Insights/metricAlerts` | `alert-http-5xx-${environmentName}` | Triggers on backend HTTP 5xx |
+| Resource group | `Microsoft.Resources/resourceGroups` | `rg-grubify-app-${resourceToken}` | Isolates app resources |
+| Container Apps environment | `Microsoft.App/managedEnvironments` | `cae-${resourceToken}` | Shared environment for backend, frontend, and app logs |
+| Backend Container App | `Microsoft.App/containerApps` | `ca-grubify-api-${resourceToken}` | Hosts the Grubify API |
+| Frontend Container App | `Microsoft.App/containerApps` | `ca-grubify-frontend-${resourceToken}` | Hosts the React frontend |
+| Azure Container Registry | `Microsoft.ContainerRegistry/registries` | environment-derived ACR name | Remote image builds |
+| Governance Function App | `Microsoft.Web/sites` | `func-agt-grubify-${resourceToken}` | AGT hook policy service |
+| SRE resource group | `Microsoft.Resources/resourceGroups` | `rg-grubify-sre-${resourceToken}` | Isolates SRE Agent resources |
+| Log Analytics workspace | `Microsoft.OperationalInsights/workspaces` | `law-sre-grubify` | Stores agent/app investigation data |
+| Application Insights | `Microsoft.Insights/components` | `appi-sre-grubify` | Stores SRE Agent telemetry |
+| User-assigned managed identity | `Microsoft.ManagedIdentity/userAssignedIdentities` | `id-sre-grubify` | Agent action and knowledge graph identity |
+| SRE Agent | `Microsoft.App/agents` | `sre-agent-grubify` | Incident detection and remediation |
+| Action Group | `Microsoft.Insights/actionGroups` | `ag-sre-grubify` | Alert action target |
+| Metric alert | `Microsoft.Insights/metricAlerts` | `alert-http-5xx-grubify` | Triggers on backend HTTP 5xx |
+| ServiceNow Logic App | `Microsoft.Logic/workflows` | `la-grubify-servicenow-handler` | Opens ServiceNow incidents from alerts |
 
 ---
 
@@ -65,22 +67,18 @@ The deployment creates two Container Apps in the same Container Apps environment
 
 Defined through the `infra/core/host/container-app.bicep` module:
 
-- Name pattern: `ca-grubify-${uniqueSuffix}`
+- Name pattern: `ca-grubify-api-${resourceToken}`
 - External ingress: `true`
 - Target port: `8080`
 - CPU: `0.5`
 - Memory: `1Gi`
-- Scale: `minReplicas: 1`, `maxReplicas: 5`
+- Scale: `minReplicas: 1`, `maxReplicas: 1`
 - Initial image: placeholder hello-world image, later replaced by post-provision deployment
 
 Runtime environment variables configured in Bicep:
 
-- `ASPNETCORE_URLS=http://+:8080`
 - `ASPNETCORE_ENVIRONMENT=Production`
-
-After image deployment, the post-provision script also sets:
-
-- `AllowedOrigins__0=<frontend-url>`
+- `AllowedOrigins__0=https://ca-grubify-frontend-${resourceToken}.<container-app-domain>`
 
 That matches the backend CORS policy in `GrubifyApi/Program.cs`.
 
@@ -88,12 +86,10 @@ That matches the backend CORS policy in `GrubifyApi/Program.cs`.
 
 Also defined through the `infra/core/host/container-app.bicep` module:
 
-- Name pattern: `ca-grubify-fe-${uniqueSuffix}`
+- Name pattern: `ca-grubify-frontend-${resourceToken}`
 - External ingress: `true`
 - Target port: `80`
-- CPU: `0.25`
-- Memory: `0.5Gi`
-- Scale: `minReplicas: 1`, `maxReplicas: 3`
+- Scale: `minReplicas: 1`, `maxReplicas: 1`
 
 Frontend runtime configuration is injected through:
 
@@ -175,28 +171,30 @@ This alert is intentionally simple. The SRE Agent is expected to determine wheth
 
 ## SRE Agent Configuration
 
-The SRE Agent is defined in `infrastructure/modules/sre-agent.bicep` with:
+The SRE Agent is created by `scripts/deploy-sre-agent.sh` with:
 
 - API version: `2025-05-01-preview`
-- Name pattern: `sre-agent-${uniqueSuffix}`
+- Name: `sre-agent-grubify`
 - Identity type: `SystemAssigned, UserAssigned`
 - Knowledge graph managed resource scope: the demo resource group
 - Action mode: `autonomous`
-- Access level: `Low`
+- Access level: `High`
 
 The agent starts with an empty `mcpServers` list in ARM and is configured further by the post-provision script.
 
 ### Managed Identity Permissions
 
-`modules/subscription-rbac.bicep` grants the user-assigned identity these subscription-scope roles:
+`scripts/deploy-sre-agent.sh` creates the user-assigned identity
+`id-sre-grubify` and grants it the roles needed for the demo environment:
 
-- `Reader`
-- `Monitoring Reader`
-- `Monitoring Contributor`
-- `Log Analytics Reader`
-- `Container Apps Contributor`
+- `Monitoring Reader` on the app resource group
+- `Contributor` on the app resource group
+- `Monitoring Reader` on the SRE resource group
 
-This is the permission set the agent uses to inspect resources, query telemetry, and perform write actions such as Container App remediation.
+This is the permission set the agent uses to inspect resources, query
+telemetry, and perform write actions such as Container App remediation. The
+validated `grubify-agt` environment has these assignments on
+`rg-grubify-app-agt01` and `rg-grubify-sre-agt01`.
 
 ### Incident Platform Wiring
 
@@ -218,7 +216,7 @@ So the runtime flow is:
 5. The SRE Agent ServiceNow incident platform detects the ServiceNow incident.
 6. The `grubify-http-errors` response plan routes the ServiceNow incident to `incident-handler-agt`, which retrieves the incident details from ServiceNow, evaluates tool calls through AGT governance hooks, and updates/resolves the ServiceNow record.
 
-ServiceNow incident indexing requires an assignment group. `SERVICENOW_ASSIGNMENT_GROUP` can provide one explicitly; otherwise the deploy script tries common ServiceNow groups such as `Software`, `Service Desk`, `Incident Management`, and `Help Desk`. Azure Monitor does not replay notifications that fired while the action group had no valid receiver, so action-group wiring must be correct before the next alert transition.
+ServiceNow incident indexing requires an assignment group. `SERVICENOW_ASSIGNMENT_GROUP` can provide one explicitly; otherwise the deploy script tries common ServiceNow groups such as `Software`, `Service Desk`, `Incident Management`, and `Help Desk`. The deploy script sends `providerType: servicenow` when saving indexing configuration, but the current ServiceNow-specific GET response omits that field; verify indexing by checking `assignmentGroup` and `lookbackDays`. Azure Monitor does not replay notifications that fired while the action group had no valid receiver, so action-group wiring must be correct before the next alert transition.
 
 ---
 
@@ -316,7 +314,7 @@ Notes:
 
 ## Actual Failure Mode Used By The Demo
 
-The intentional incident is implemented in `src/grubify/GrubifyApi/Controllers/CartController.cs`.
+The intentional incident is implemented in `GrubifyApi/Controllers/CartController.cs`.
 
 The `POST /api/cart/{userId}/items` handler does two things that matter for the incident:
 
@@ -355,12 +353,13 @@ The script defaults to:
 
 ### Primary Resources To Inspect
 
-- Backend Container App: `ca-grubify-${uniqueSuffix}`
-- Frontend Container App: `ca-grubify-fe-${uniqueSuffix}`
-- Container Apps environment: `cae-${uniqueSuffix}`
-- Log Analytics workspace: `law-${uniqueSuffix}`
-- SRE Agent: `sre-agent-${uniqueSuffix}`
-- Metric alert: `alert-http-5xx-${environmentName}`
+- Backend Container App: `ca-grubify-api-${resourceToken}`
+- Frontend Container App: `ca-grubify-frontend-${resourceToken}`
+- Container Apps environment: `cae-${resourceToken}` unless an existing environment is supplied
+- Governance Function App: `func-agt-grubify-${resourceToken}`
+- SRE Agent: `sre-agent-grubify`
+- Metric alert: `alert-http-5xx-grubify`
+- ServiceNow Logic App: `la-grubify-servicenow-handler`
 
 ### Metrics That Match The Runbook
 

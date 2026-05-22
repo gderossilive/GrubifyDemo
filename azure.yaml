@@ -23,10 +23,19 @@ services:
     host: function
 
 hooks:
-  postdeploy:
-    shell: pwsh
+  preprovision:
+    shell: sh
     run: |
-      echo "🍕 Grubify Food Delivery App deployed successfully!"
-      echo "Frontend URL: $env:FRONTEND_URL"
-      echo "API URL: $env:API_BASE_URL"
-      echo "AGT Governance URL: $env:AGT_FUNCTION_URL"
+      python3 bin/assemble-agent.py --dry-run
+
+  postdeploy:
+    shell: sh
+    run: |
+      python3 bin/assemble-agent.py
+      python3 bin/apply-extras.py
+      echo "Grubify Food Delivery App deployed successfully!"
+      echo "Frontend URL: $FRONTEND_URL"
+      echo "API URL: $API_BASE_URL"
+      echo "AGT Governance URL: $AGT_FUNCTION_URL"
+      echo "SRE Agent: $SRE_AGENT_NAME"
+      echo "SRE Agent Endpoint: $SRE_AGENT_ENDPOINT"
