@@ -167,11 +167,17 @@ jobs:
         # Docker is preinstalled and the ACR Task log-blob polling is flaky
         # ("BlobNotFound" 404 even when the image was built and pushed),
         # which makes azd declare the deploy a failure. Build locally and
-        # push to ACR instead.
+        # push to ACR instead. Also strip the postdeploy hook — this
+        # workflow only ships a new app release, SRE Agent data-plane
+        # provisioning (assemble-agent.py + apply-extras.py) is run from
+        # the operator's workstation, not from CI.
         run: |
           # Remove the `    docker:\n      remoteBuild: true` block wherever
           # it appears under a service definition.
           sed -i -e '/^    docker:$/{N;/\n      remoteBuild: true$/d;}' azure.yaml
+          # Drop the postdeploy hook (and everything after it, since it's the
+          # last block in the file).
+          sed -i -e '/^  postdeploy:$/,$d' azure.yaml
           echo "--- azure.yaml after patch ---"
           cat azure.yaml
 
