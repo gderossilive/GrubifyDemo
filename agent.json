@@ -2,11 +2,11 @@
   "schema": "grubify-sre-agent-v2.agent/v1",
   "identity": {
     "agentName": "${SRE_AGENT_NAME:-sre-agent-grubify}",
-    "resourceGroup": "${SRE_AGENT_RESOURCE_GROUP:-rg-grubify-sre-v2gid}",
+    "resourceGroup": "${SRE_AGENT_RESOURCE_GROUP:-rg-grubify-sre-e2e01}",
     "subscription": "${AZURE_SUBSCRIPTION_ID:-06dbbc7b-2363-4dd4-9803-95d07f1a8d3e}",
     "location": "${AZURE_LOCATION:-swedencentral}",
     "targetResourceGroups": [
-      "${AZURE_RESOURCE_GROUP:-rg-grubify-app-v2gid}"
+      "${AZURE_RESOURCE_GROUP:-rg-grubify-app-e2e01}"
     ]
   },
   "access": {
@@ -14,7 +14,7 @@
     "actionMode": "autonomous"
   },
   "governance": {
-    "functionUrl": "${AGT_FUNCTION_URL:-https://func-agt-grubify-v2gid.azurewebsites.net}",
+    "functionUrl": "${AGT_FUNCTION_URL:-https://func-agt-grubify-e2e01.azurewebsites.net}",
     "authMode": "${AGT_AUTH_MODE:-none}",
     "clientId": "${AGT_CLIENT_ID:-}",
     "functionKey": "${AGT_FUNCTION_KEY:-}"
