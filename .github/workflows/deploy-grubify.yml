@@ -155,6 +155,27 @@ jobs:
           echo "Resolved ACR endpoint: $ACR_LOGIN_SERVER"
           azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR_LOGIN_SERVER"
 
+      - name: Disable remoteBuild for CI
+        # azure.yaml uses docker.remoteBuild: true so local dev (devcontainer
+        # without Docker) can rely on ACR Tasks. On GitHub-hosted runners
+        # Docker is preinstalled and the ACR Task log-blob polling is flaky
+        # ("BlobNotFound" 404 even when the image was built and pushed),
+        # which makes azd declare the deploy a failure. Build locally and
+        # push to ACR instead.
+        run: |
+          # Remove the `    docker:\n      remoteBuild: true` block wherever
+          # it appears under a service definition.
+          sed -i -e '/^    docker:$/{N;/\n      remoteBuild: true$/d;}' azure.yaml
+          echo "--- azure.yaml after patch ---"
+          cat azure.yaml
+
+      - name: Log in to ACR
+        if: inputs.deploy_mode == 'deploy'
+        run: |
+          RG="rg-grubify-app-$AZURE_RESOURCE_TOKEN"
+          ACR_NAME=$(az acr list -g "$RG" --query "[0].name" -o tsv)
+          az acr login --name "$ACR_NAME"
+
       - name: azd up
         if: inputs.deploy_mode == 'up'
         run: azd up --no-prompt
