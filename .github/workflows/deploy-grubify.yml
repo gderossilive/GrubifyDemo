@@ -136,6 +136,12 @@ jobs:
           # so `azd deploy` can locate it without scanning by env-name tag —
           # the RG name only contains the token, not the full env name.
           azd env set AZURE_RESOURCE_GROUP "rg-grubify-app-$AZURE_RESOURCE_TOKEN"
+          # SRE Agent RG and governance URL are referenced by bin/apply-extras.py
+          # (postdeploy hook) via the ${VAR:-default} expansion in agent.json.
+          # The committed defaults point at a stale token, so set them
+          # explicitly here.
+          azd env set SRE_AGENT_RESOURCE_GROUP "rg-grubify-sre-$AZURE_RESOURCE_TOKEN"
+          azd env set AGT_FUNCTION_URL "https://func-agt-grubify-$AZURE_RESOURCE_TOKEN.azurewebsites.net"
           azd env set RELEASE_VERSION "$RELEASE_VERSION"
           azd env set RELEASE_PROFILE "$RELEASE_PROFILE"
 
