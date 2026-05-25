@@ -139,6 +139,22 @@ jobs:
           azd env set RELEASE_VERSION "$RELEASE_VERSION"
           azd env set RELEASE_PROFILE "$RELEASE_PROFILE"
 
+      - name: Resolve ACR endpoint for deploy
+        # `azd deploy` skips Bicep, so the env has no Bicep outputs. With
+        # docker.remoteBuild: true in azure.yaml, azd needs
+        # AZURE_CONTAINER_REGISTRY_ENDPOINT to push images. Look it up from
+        # the existing RG and inject it into the azd env.
+        if: inputs.deploy_mode == 'deploy'
+        run: |
+          RG="rg-grubify-app-$AZURE_RESOURCE_TOKEN"
+          ACR_LOGIN_SERVER=$(az acr list -g "$RG" --query "[0].loginServer" -o tsv)
+          if [ -z "$ACR_LOGIN_SERVER" ]; then
+            echo "::error::No ACR found in resource group $RG. Run with deploy_mode=up first."
+            exit 1
+          fi
+          echo "Resolved ACR endpoint: $ACR_LOGIN_SERVER"
+          azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "$ACR_LOGIN_SERVER"
+
       - name: azd up
         if: inputs.deploy_mode == 'up'
         run: azd up --no-prompt
