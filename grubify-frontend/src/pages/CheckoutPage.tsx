@@ -11,7 +11,6 @@ import {
   RadioGroup,
   FormControlLabel,
   FormControl,
-  FormLabel,
   Paper,
   Divider,
   Alert,
@@ -58,6 +57,7 @@ const CheckoutPage: React.FC = () => {
 
   useEffect(() => {
     fetchCart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchCart = async () => {

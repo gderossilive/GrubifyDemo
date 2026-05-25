@@ -13,7 +13,6 @@ import {
   CircularProgress,
   Alert,
   TextField,
-  MenuItem,
   InputAdornment,
 } from '@mui/material';
 import {
@@ -53,6 +52,7 @@ const HomePage: React.FC = () => {
 
   useEffect(() => {
     filterRestaurants();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restaurants, selectedCuisine, searchQuery]);
 
   const fetchRestaurants = async () => {

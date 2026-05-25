@@ -24,7 +24,6 @@ import {
   Remove as RemoveIcon,
   AccessTime as TimeIcon,
   DeliveryDining as DeliveryIcon,
-  Star as StarIcon,
 } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Restaurant, FoodItem } from '../types';
