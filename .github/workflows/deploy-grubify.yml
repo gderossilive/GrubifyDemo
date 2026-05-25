@@ -108,7 +108,11 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Install azd
-        uses: Azure/setup-azd@v1.0.0
+        # Use the official install script directly because the Azure/setup-azd
+        # action (v1 and v2) still points at azdrelease.azureedge.net, which
+        # has been retired and now fails with ENOTFOUND. aka.ms/install-azd.sh
+        # follows the redirect to the current release host.
+        run: curl -fsSL https://aka.ms/install-azd.sh | bash
 
       - name: azd auth login (federated)
         run: |
