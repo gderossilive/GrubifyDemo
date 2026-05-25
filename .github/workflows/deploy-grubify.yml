@@ -131,6 +131,11 @@ jobs:
           azd env set AZURE_LOCATION "$AZURE_LOCATION"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set GRUBIFY_RESOURCE_TOKEN "$AZURE_RESOURCE_TOKEN"
+          # The resource group name is templated in infra/main.parameters.json
+          # as rg-grubify-app-${GRUBIFY_RESOURCE_TOKEN}. We pin it explicitly
+          # so `azd deploy` can locate it without scanning by env-name tag —
+          # the RG name only contains the token, not the full env name.
+          azd env set AZURE_RESOURCE_GROUP "rg-grubify-app-$AZURE_RESOURCE_TOKEN"
           azd env set RELEASE_VERSION "$RELEASE_VERSION"
           azd env set RELEASE_PROFILE "$RELEASE_PROFILE"
 
