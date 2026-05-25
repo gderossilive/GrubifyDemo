@@ -1,0 +1,141 @@
+name: Deploy Grubify
+
+# Manual deployment workflow used by the deployment-manager SRE Agent subagent.
+# This workflow:
+#   1. Validates the frontend and API build cleanly.
+#   2. Runs `azd up` or `azd deploy` against the requested environment.
+#
+# Authentication uses GitHub OIDC federation against an Entra ID app
+# registration with Contributor + RBAC on the target subscription/RG.
+# Required GitHub Secrets:
+#   AZURE_CLIENT_ID
+#   AZURE_TENANT_ID
+#   AZURE_SUBSCRIPTION_ID
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment_name:
+        description: "azd environment name (e.g. grubify-demo)"
+        required: true
+        type: string
+      resource_token:
+        description: "Short token used in resource names (e.g. demo01)"
+        required: true
+        type: string
+      release_version:
+        description: "Semantic release version (e.g. 0.2.0-step0)"
+        required: true
+        type: string
+      release_profile:
+        description: "Release profile"
+        required: true
+        type: choice
+        default: cart-leak-baseline
+        options:
+          - cart-leak-baseline
+      deploy_mode:
+        description: "azd command to run"
+        required: true
+        type: choice
+        default: deploy
+        options:
+          - up
+          - deploy
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_LOCATION: swedencentral
+  AZURE_ENV_NAME: ${{ inputs.environment_name }}
+  AZURE_RESOURCE_TOKEN: ${{ inputs.resource_token }}
+  RELEASE_VERSION: ${{ inputs.release_version }}
+  RELEASE_PROFILE: ${{ inputs.release_profile }}
+
+jobs:
+  validate:
+    name: Validate build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: grubify-frontend/package-lock.json
+
+      - name: Install and build frontend
+        working-directory: grubify-frontend
+        run: |
+          npm ci
+          CI=true npm run build
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Restore and build API
+        run: |
+          dotnet restore Grubify.sln
+          dotnet build Grubify.sln --configuration Release --no-restore
+
+  deploy:
+    name: Deploy to Azure (${{ inputs.deploy_mode }})
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install azd
+        uses: Azure/setup-azd@v1.0.0
+
+      - name: azd auth login (federated)
+        run: |
+          azd auth login \
+            --client-id "$AZURE_CLIENT_ID" \
+            --federated-credential-provider github \
+            --tenant-id "$AZURE_TENANT_ID"
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+      - name: Configure azd environment
+        run: |
+          azd env new "$AZURE_ENV_NAME" --no-prompt || \
+            azd env select "$AZURE_ENV_NAME"
+          azd env set AZURE_LOCATION "$AZURE_LOCATION"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          azd env set RESOURCE_TOKEN "$AZURE_RESOURCE_TOKEN"
+          azd env set RELEASE_VERSION "$RELEASE_VERSION"
+          azd env set RELEASE_PROFILE "$RELEASE_PROFILE"
+
+      - name: azd up
+        if: inputs.deploy_mode == 'up'
+        run: azd up --no-prompt
+
+      - name: azd deploy
+        if: inputs.deploy_mode == 'deploy'
+        run: azd deploy --no-prompt
+
+      - name: Summary
+        run: |
+          echo "## Grubify deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: \`$AZURE_ENV_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Resource token: \`$AZURE_RESOURCE_TOKEN\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Release version: \`$RELEASE_VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Release profile: \`$RELEASE_PROFILE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deploy mode: \`${{ inputs.deploy_mode }}\`" >> "$GITHUB_STEP_SUMMARY"

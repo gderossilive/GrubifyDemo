@@ -1,0 +1,17 @@
+# Tests Manager Subagent
+# Runs controlled post-deploy validation tests and the cart load-trigger phase
+# of the Grubify demo. Operates only after deployment-manager confirms a
+# healthy baseline.
+api_version: azuresre.ai/v1
+kind: AgentConfiguration
+spec:
+  name: tests-manager
+  system_prompt_file: instructions/tests-manager.instructions.md
+  handoff_description: Runs controlled post-deploy tests and the cart load trigger; hands off to incident-handler when expected incident evidence appears
+  agent_type: Autonomous
+  tools:
+    - SearchMemory
+    - RunAzCliReadCommands
+    - QueryLogAnalyticsByWorkspaceId
+    - QueryAppInsightsByResourceId
+    - ExecutePythonCode

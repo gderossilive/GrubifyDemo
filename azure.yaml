@@ -1,6 +1,6 @@
 name: grubify
 metadata:
-  template: grubify-food-delivery@0.0.1-beta
+  template: grubify-food-delivery@0.2.0-step0
 
 services:
   api:

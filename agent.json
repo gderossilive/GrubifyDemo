@@ -28,7 +28,9 @@
       "code-analyzer",
       "issue-triager",
       "incident-handler-core",
-      "incident-handler-agt"
+      "incident-handler-agt",
+      "deployment-manager",
+      "tests-manager"
     ]
   }
 }

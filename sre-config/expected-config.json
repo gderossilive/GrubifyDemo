@@ -13,7 +13,9 @@
     "code-analyzer",
     "issue-triager",
     "incident-handler",
-    "incident-handler-agt"
+    "incident-handler-agt",
+    "deployment-manager",
+    "tests-manager"
   ],
   "hooks": [],
   "commonPrompts": [],
@@ -31,6 +33,8 @@
     "github-issue-triage.md",
     "grubify-app-architecture.md",
     "grubify-infra-architecture.md",
+    "grubify-deployment-runbook.md",
+    "grubify-tests-runbook.md",
     "http-500-errors.md",
     "incident-report-template.md",
     "servicenow-incident-flow.md",
