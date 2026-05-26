@@ -1,0 +1,145 @@
+name: Deploy SRE Agent
+
+# Manual workflow that runs the SRE Agent v2 content flow against an
+# already-provisioned Grubify environment. It assembles agent content
+# (bin/assemble-agent.py + bin/apply-extras.py via scripts/deploy-sre-agent.sh)
+# and applies the ServiceNow / Teams extras that are not yet modeled in Bicep.
+#
+# Prerequisites:
+#   - `azd up` (or the Deploy Grubify workflow) has already provisioned the
+#     app and SRE Agent resource groups for the given resource token.
+#   - The OIDC service principal has the `SRE Agent Administrator` role on
+#     the SRE Agent resource (ARM Owner alone is not sufficient — see
+#     repo memory).
+#
+# Required GitHub Secrets:
+#   AZURE_CLIENT_ID
+#   AZURE_TENANT_ID
+#   AZURE_SUBSCRIPTION_ID
+# Optional GitHub Secrets (only if enabling ServiceNow):
+#   SERVICENOW_INSTANCE          (e.g. devNNNNN or full https URL)
+#   SERVICENOW_USERNAME
+#   SERVICENOW_PASSWORD
+#   SERVICENOW_ASSIGNMENT_GROUP  (optional override)
+# Optional GitHub Variables:
+#   INCIDENT_NOTIFICATION_EMAIL
+#   TEAMS_TENANT_ID, TEAMS_GROUP_ID, TEAMS_CHANNEL_ID
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment_name:
+        description: "azd environment name (e.g. grubify-demo)"
+        required: true
+        type: string
+      resource_token:
+        description: "Short token used in resource names (e.g. demo01)"
+        required: true
+        type: string
+      incident_handler_agent:
+        description: "Incident handler subagent name"
+        required: true
+        type: string
+        default: incident-handler-agt
+      enable_servicenow:
+        description: "Configure the ServiceNow incident platform + Logic App handler"
+        required: true
+        type: boolean
+        default: false
+      enable_teams:
+        description: "Verify the Teams connector"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_LOCATION: swedencentral
+  AZURE_ENV_NAME: ${{ inputs.environment_name }}
+  GRUBIFY_RESOURCE_TOKEN: ${{ inputs.resource_token }}
+  RESOURCE_TOKEN: ${{ inputs.resource_token }}
+  APP_RG: rg-grubify-app-${{ inputs.resource_token }}
+  SRE_RG: rg-grubify-sre-${{ inputs.resource_token }}
+  AGT_FUNCTION_URL: https://func-agt-grubify-${{ inputs.resource_token }}.azurewebsites.net
+  INCIDENT_HANDLER_AGENT: ${{ inputs.incident_handler_agent }}
+  ENABLE_SERVICENOW_HANDLER: ${{ inputs.enable_servicenow }}
+  ENABLE_TEAMS_CONNECTOR: ${{ inputs.enable_teams }}
+  GITHUB_REPO: ${{ github.repository }}
+
+jobs:
+  deploy-sre-agent:
+    name: Deploy SRE Agent content
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install azd
+        run: curl -fsSL https://aka.ms/install-azd.sh | bash
+
+      - name: azd auth login (federated)
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          azd auth login \
+            --client-id "$AZURE_CLIENT_ID" \
+            --federated-credential-provider github \
+            --tenant-id "$AZURE_TENANT_ID"
+
+      - name: Select azd environment
+        run: |
+          azd env select "$AZURE_ENV_NAME" 2>/dev/null || \
+            azd env new "$AZURE_ENV_NAME" --no-prompt
+          azd env set AZURE_LOCATION "$AZURE_LOCATION"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          azd env set GRUBIFY_RESOURCE_TOKEN "$GRUBIFY_RESOURCE_TOKEN"
+          azd env set AZURE_RESOURCE_GROUP "$APP_RG"
+          azd env set SRE_AGENT_RESOURCE_GROUP "$SRE_RG"
+          azd env set AGT_FUNCTION_URL "$AGT_FUNCTION_URL"
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml requests
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Deploy SRE Agent content
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          SERVICENOW_INSTANCE: ${{ secrets.SERVICENOW_INSTANCE }}
+          SERVICENOW_USERNAME: ${{ secrets.SERVICENOW_USERNAME }}
+          SERVICENOW_PASSWORD: ${{ secrets.SERVICENOW_PASSWORD }}
+          SERVICENOW_ASSIGNMENT_GROUP: ${{ secrets.SERVICENOW_ASSIGNMENT_GROUP }}
+          INCIDENT_NOTIFICATION_EMAIL: ${{ vars.INCIDENT_NOTIFICATION_EMAIL }}
+          TEAMS_TENANT_ID: ${{ vars.TEAMS_TENANT_ID }}
+          TEAMS_GROUP_ID: ${{ vars.TEAMS_GROUP_ID }}
+          TEAMS_CHANNEL_ID: ${{ vars.TEAMS_CHANNEL_ID }}
+        run: |
+          chmod +x scripts/deploy-sre-agent.sh
+          ./scripts/deploy-sre-agent.sh
+
+      - name: Summary
+        run: |
+          echo "## SRE Agent deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: \`$AZURE_ENV_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Resource token: \`$GRUBIFY_RESOURCE_TOKEN\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- App RG: \`$APP_RG\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SRE RG: \`$SRE_RG\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Incident handler: \`$INCIDENT_HANDLER_AGENT\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ServiceNow extras: \`$ENABLE_SERVICENOW_HANDLER\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Teams extras: \`$ENABLE_TEAMS_CONNECTOR\`" >> "$GITHUB_STEP_SUMMARY"
