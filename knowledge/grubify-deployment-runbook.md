@@ -75,10 +75,23 @@ intents (keywords: `deploy`, `release`, `ship`, `roll out`, `push`):
 2. Echo the resolved set to the operator and wait for `yes`/`go`/`confirm`
    unless the operator explicitly said "without confirmation".
 3. Dispatch `.github/workflows/deploy-grubify.yml` using the GitHub MCP tools.
+    If `github-mcp` is unauthorized in-session, use PAT fallback:
+    - Read `connector/github` from
+       `GET /api/v2/extendedAgent/connectors/github` on the SRE endpoint.
+    - Confirm `dataConnectorType=GitHubPat` and extract
+       `extendedProperties.accessToken`.
+    - Call GitHub REST directly to dispatch:
+       `POST /repos/gderossilive/GrubifyDemo/actions/workflows/deploy-grubify.yml/dispatches`.
 4. Poll the workflow run status until it reaches a terminal conclusion
    (`success`, `failure`, `cancelled`, or `timed_out`).
 5. Capture the run URL, conclusion, and duration for the release summary.
 6. On non-`success` conclusion, follow the **Failure-path handoff** section.
+
+Notes for fallback mode:
+
+- Do not treat `gh auth status` as authoritative in the sandbox.
+- Prefer direct REST with `Authorization: Bearer <connector PAT>`.
+- A deploy is valid only when a run id and run URL are present.
 
 ## Failure-path handoff (Decision: auto-handoff)
 
@@ -106,9 +119,9 @@ Handoff payload shape (pass verbatim as the handoff context):
 }
 ```
 
-Use `github-mcp` tools to retrieve `last_failed_step` and the failing job's
-log tail. After handoff, also report the run URL + handoff confirmation to
-the operator in chat.
+Use `github-mcp` tools or GitHub REST fallback to retrieve
+`last_failed_step` and the failing job's log tail. After handoff, also report
+the run URL + handoff confirmation to the operator in chat.
 
 ## PAT rotation
 
