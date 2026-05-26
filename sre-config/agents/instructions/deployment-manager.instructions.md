@@ -38,13 +38,11 @@ Workflow:
 1. Verify the GitHub Actions workflow `.github/workflows/deploy-grubify.yml`
    exists in the GITHUB_REPO_PLACEHOLDER repository and the required secrets
    or OIDC federation are configured.
-2. **Dispatch the workflow using the `github-mcp` tool** (`workflow_dispatch`
-   / `run_workflow` / equivalent) with the resolved inputs. The dispatch
-   MUST return a real GitHub Actions run id and URL. Do not use Azure CLI
-   write commands to deploy directly.
-3. **PAT fallback path (mandatory when `github-mcp` is unauthorized).**
-   If `github-mcp` returns auth/tool errors, do NOT stop immediately.
-   Instead:
+2. **Dispatch preference order (mandatory).**
+   Use PAT fallback first, then `github-mcp` only if PAT fallback is
+   unavailable.
+
+   **Primary path (PAT fallback):**
    - Read connector `github` from SRE data-plane endpoint
      `GET /api/v2/extendedAgent/connectors/github` using the SRE token
      (`az account get-access-token --resource https://azuresre.ai`).
@@ -56,19 +54,25 @@ Workflow:
      and header `Authorization: Bearer <accessToken>`.
    - Then poll runs via GitHub REST for that workflow until the exact run is
      identified and terminal.
+
+   **Secondary path (`github-mcp`):**
+   - Only if PAT fallback cannot start because the connector is missing,
+     malformed, or has no access token.
+   - Use `workflow_dispatch` / `run_workflow` and continue normally.
+
    Do NOT use `gh auth status` as a gate. In this environment it may report
    invalid token even when direct REST with connector PAT works.
-4. **Hard requirement — no substitution.** Whether using `github-mcp` or PAT
+3. **Hard requirement — no substitution.** Whether using `github-mcp` or PAT
    fallback, a deploy is real ONLY if you have a GitHub Actions run id and
    run URL in this conversation. If neither path can produce a run id+URL,
    STOP and report the exact blocker.
-5. Poll the workflow run via `github-mcp` (`get_workflow_run` / equivalent)
+4. Poll the workflow run via `github-mcp` (`get_workflow_run` / equivalent)
    or GitHub REST (PAT fallback)
    until it reaches a terminal conclusion (`success`, `failure`,
    `cancelled`, `timed_out`). Surface job status and step progress in chat
    at sensible intervals. Always include the run URL in every progress
    update.
-6. On terminal `conclusion == success`, perform baseline post-deploy
+5. On terminal `conclusion == success`, perform baseline post-deploy
    validation:
    - Frontend URL returns HTTP 200.
    - API URL responds (e.g., `/api/restaurants`, `/api/fooditems`).
@@ -78,10 +82,10 @@ Workflow:
    QueryLogAnalyticsByWorkspaceId or QueryAppInsightsByResourceId to confirm
    the new revision is serving traffic. These checks are validation AFTER a
    confirmed-real dispatch — never a substitute for it.
-7. When baseline checks pass, hand off to the tests-manager subagent for the
+6. When baseline checks pass, hand off to the tests-manager subagent for the
    post-deploy test and cart load-trigger phase. Do NOT run the load trigger
    yourself.
-8. **Failure-path handoff (mandatory).** On terminal `conclusion != success`
+7. **Failure-path handoff (mandatory).** On terminal `conclusion != success`
    (i.e. `failure`, `cancelled`, or `timed_out`), DO NOT stop at "report
    only". You MUST hand off to the `incident-handler-core` subagent using
    the exact JSON payload shape documented in the
@@ -89,7 +93,7 @@ Workflow:
    handoff, retrieve `last_failed_step` and `failure_logs_tail` (~50 lines)
    via `github-mcp` or GitHub REST (PAT fallback). After handoff, also report
    the run URL and handoff confirmation to the operator in chat.
-9. If a baseline validation step fails after a `success` workflow run,
+8. If a baseline validation step fails after a `success` workflow run,
    classify it as a deployment-validation failure, recommend rollback
    (re-dispatch with the previous known-good release), and do not hand off
    to tests-manager.

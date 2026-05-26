@@ -74,14 +74,18 @@ intents (keywords: `deploy`, `release`, `ship`, `roll out`, `push`):
 1. Resolve all 5 workflow inputs (operator-supplied first, then defaults).
 2. Echo the resolved set to the operator and wait for `yes`/`go`/`confirm`
    unless the operator explicitly said "without confirmation".
-3. Dispatch `.github/workflows/deploy-grubify.yml` using the GitHub MCP tools.
-    If `github-mcp` is unauthorized in-session, use PAT fallback:
+3. Dispatch `.github/workflows/deploy-grubify.yml` with PAT fallback first.
+    If PAT fallback cannot start, use GitHub MCP as secondary path.
+
+    PAT fallback steps:
     - Read `connector/github` from
        `GET /api/v2/extendedAgent/connectors/github` on the SRE endpoint.
     - Confirm `dataConnectorType=GitHubPat` and extract
        `extendedProperties.accessToken`.
     - Call GitHub REST directly to dispatch:
        `POST /repos/gderossilive/GrubifyDemo/actions/workflows/deploy-grubify.yml/dispatches`.
+    Secondary path:
+    - Use `github-mcp` workflow dispatch only if PAT fallback cannot start.
 4. Poll the workflow run status until it reaches a terminal conclusion
    (`success`, `failure`, `cancelled`, or `timed_out`).
 5. Capture the run URL, conclusion, and duration for the release summary.
