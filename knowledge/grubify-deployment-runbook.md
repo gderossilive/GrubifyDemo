@@ -45,13 +45,78 @@ The deployment workflow exposes the following `workflow_dispatch` inputs:
 - `deploy_mode` — `up` for first-time provisioning or `deploy` for
   app-only redeploys after provisioning.
 
+## Default values (when the operator omits an input)
+
+When an operator triggers a deploy via chat without supplying every input,
+resolve missing values from this table and confirm them back before dispatch.
+Do NOT silently apply defaults — always echo the resolved set for ack.
+
+| Input             | Default              | Notes                                              |
+|-------------------|----------------------|----------------------------------------------------|
+| `environment_name`| `e2e01`              | Current live azd environment.                      |
+| `resource_token`  | `e2e01`              | Matches the environment_name.                      |
+| `release_profile` | `cart-leak-baseline` | Only documented profile today.                     |
+| `deploy_mode`     | `deploy`             | App-only redeploy; use `up` only when infra changes.|
+| `release_version` | `YYYYMMDD-<shortsha>`| Auto-generated from current UTC date + 7-char SHA of `main`. Example: `20260526-7ff693b`. |
+
+## Natural-language invocation examples
+
+The operator may phrase requests in many ways. Recognize these as deploy
+intents (keywords: `deploy`, `release`, `ship`, `roll out`, `push`):
+
+- **Terse**: "deploy to e2e01" → resolve all 5 inputs from defaults, confirm, dispatch.
+- **Version only**: "release 0.3.0 to e2e01" → `release_version=0.3.0`, rest from defaults.
+- **Verbose**: "ship version 0.3.0 to environment e2e01 using profile cart-leak-baseline in deploy mode" → use exactly as specified, confirm, dispatch.
+- **Skip confirmation** (advanced): "deploy 0.3.0 to e2e01 without confirmation" → dispatch immediately after resolving defaults; still report the resolved set in the summary.
+
 ## Dispatch procedure
 
-1. Gather and confirm all required workflow inputs from the operator.
-2. Dispatch `.github/workflows/deploy-grubify.yml` using the GitHub MCP tools.
-3. Poll the workflow run status until it reaches a terminal conclusion
+1. Resolve all 5 workflow inputs (operator-supplied first, then defaults).
+2. Echo the resolved set to the operator and wait for `yes`/`go`/`confirm`
+   unless the operator explicitly said "without confirmation".
+3. Dispatch `.github/workflows/deploy-grubify.yml` using the GitHub MCP tools.
+4. Poll the workflow run status until it reaches a terminal conclusion
    (`success`, `failure`, `cancelled`, or `timed_out`).
-4. Capture the run URL, conclusion, and duration for the release summary.
+5. Capture the run URL, conclusion, and duration for the release summary.
+6. On non-`success` conclusion, follow the **Failure-path handoff** section.
+
+## Failure-path handoff (Decision: auto-handoff)
+
+If the dispatched workflow run ends with `conclusion != success`, the
+subagent MUST hand off to `incident-handler-core` for investigation. Do not
+stop at "report only".
+
+Handoff payload shape (pass verbatim as the handoff context):
+
+```json
+{
+  "source": "deployment-manager",
+  "run_url": "https://github.com/<owner>/<repo>/actions/runs/<run_id>",
+  "run_id": "<run_id>",
+  "conclusion": "failure|cancelled|timed_out",
+  "last_failed_step": "<job>/<step name>",
+  "failure_logs_tail": "<last ~50 lines of the failed step's log>",
+  "release_inputs": {
+    "environment_name": "...",
+    "resource_token": "...",
+    "release_version": "...",
+    "release_profile": "...",
+    "deploy_mode": "..."
+  }
+}
+```
+
+Use `github-mcp` tools to retrieve `last_failed_step` and the failing job's
+log tail. After handoff, also report the run URL + handoff confirmation to
+the operator in chat.
+
+## PAT rotation
+
+The `github-mcp` connector uses a fine-grained GitHub PAT scoped to
+`gderossilive/GrubifyDemo` with `actions:write`, `contents:read`,
+`issues:write`, `pull_requests:read`. Rotate quarterly. Owner: repo admin.
+After rotation, push the new value to the agent via
+`python3 bin/apply-extras.py` (loads `GITHUB_PAT` from `.env`).
 
 ## Baseline post-deploy validation
 
