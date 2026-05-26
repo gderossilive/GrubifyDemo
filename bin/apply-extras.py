@@ -44,6 +44,49 @@ def get_token() -> str:
             errors.append(str(exc))
     raise RuntimeError("Could not get SRE data-plane token:\n" + "\n".join(errors))
 
+
+def resolve_github_pat() -> str:
+    direct = os.environ.get("GITHUB_PAT", "").strip()
+    if direct:
+        return direct
+
+    secret_uri = os.environ.get("GITHUB_PAT_SECRET_URI", "").strip()
+    if secret_uri:
+        try:
+            return az("keyvault", "secret", "show", "--id", secret_uri, "--query", "value", "-o", "tsv").strip()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Could not read GITHUB_PAT from GITHUB_PAT_SECRET_URI. "
+                "Verify Key Vault RBAC (Key Vault Secrets User) for the executing identity.\n"
+                + str(exc)
+            )
+
+    vault_name = os.environ.get("GITHUB_PAT_KEYVAULT_NAME", "").strip()
+    secret_name = os.environ.get("GITHUB_PAT_SECRET_NAME", "").strip()
+    if vault_name and secret_name:
+        try:
+            return az(
+                "keyvault",
+                "secret",
+                "show",
+                "--vault-name",
+                vault_name,
+                "--name",
+                secret_name,
+                "--query",
+                "value",
+                "-o",
+                "tsv",
+            ).strip()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Could not read GITHUB_PAT from Key Vault name/secret env vars. "
+                "Verify Key Vault RBAC (Key Vault Secrets User) for the executing identity.\n"
+                + str(exc)
+            )
+
+    return ""
+
 def resolve_endpoint(resource_group: str, agent_name: str, subscription: str | None) -> str:
     args = [
         "resource",
@@ -174,9 +217,9 @@ def apply_subagents(endpoint: str, token: str, entries: list[dict[str, Any]], dr
 
 
 def install_github_pat(endpoint: str, token: str, dry_run: bool) -> None:
-    github_pat = os.environ.get("GITHUB_PAT")
+    github_pat = resolve_github_pat()
     if not github_pat:
-        print("  GitHub auth: no GITHUB_PAT set")
+        print("  GitHub auth: no PAT found (set GITHUB_PAT or Key Vault env vars)")
         return
     if dry_run:
         print("  GitHub auth: would install PAT")
@@ -193,9 +236,9 @@ def install_github_pat(endpoint: str, token: str, dry_run: bool) -> None:
 
 
 def apply_github_pat_connector(endpoint: str, token: str, github_repos: list[dict[str, Any]], dry_run: bool) -> None:
-    github_pat = os.environ.get("GITHUB_PAT")
+    github_pat = resolve_github_pat()
     if not github_pat:
-        print("    GitHub auth: no GITHUB_PAT set; cannot apply PAT connector")
+        print("    GitHub auth: no PAT found (set GITHUB_PAT or Key Vault env vars); cannot apply PAT connector")
         return
     repo_spec = (github_repos[0].get("spec") or {}) if github_repos else {}
     repo_url = (repo_spec.get("url") or "gderossilive/GrubifyDemo").rstrip("/")
@@ -248,7 +291,7 @@ def apply_github_repos(
     # configured manually in the portal).
     enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
     if enable_github_auth:
-        if os.environ.get("GITHUB_PAT"):
+        if resolve_github_pat():
             apply_github_pat_connector(endpoint, token, github_repos, dry_run)
         elif not dry_run:
             connector_body = json.dumps({

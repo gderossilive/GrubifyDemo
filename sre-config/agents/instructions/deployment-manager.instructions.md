@@ -48,12 +48,18 @@ Workflow:
      (`az account get-access-token --resource https://azuresre.ai`).
    - Require `properties.dataConnectorType == GitHubPat` and a non-empty
      `extendedProperties.accessToken`.
+    - If PAT is sourced from Key Vault, require one of:
+       `GITHUB_PAT_SECRET_URI` or (`GITHUB_PAT_KEYVAULT_NAME` +
+       `GITHUB_PAT_SECRET_NAME`) and ensure the executing identity has Key Vault
+       RBAC role `Key Vault Secrets User`.
    - Dispatch workflow via direct GitHub REST:
      `POST https://api.github.com/repos/gderossilive/GrubifyDemo/actions/workflows/deploy-grubify.yml/dispatches`
      with body `{ "ref": "main", "inputs": { ...resolved inputs... } }`
      and header `Authorization: Bearer <accessToken>`.
    - Then poll runs via GitHub REST for that workflow until the exact run is
      identified and terminal.
+    - If app RG-based checks are needed and `rg-grubify-app-${resource_token}`
+       is missing, resolve RG from ACR `cr${resource_token}` and continue.
 
    **Secondary path (`github-mcp`):**
    - Only if PAT fallback cannot start because the connector is missing,
@@ -78,6 +84,7 @@ Workflow:
    - API URL responds (e.g., `/api/restaurants`, `/api/fooditems`).
    - Order placement does not hit the v2 payment failure path.
    - A single `POST /api/cart/{userId}/items` returns success.
+   - `POST /api/orders` returns `201`.
    Use ExecutePythonCode for HTTP probes where helpful, and
    QueryLogAnalyticsByWorkspaceId or QueryAppInsightsByResourceId to confirm
    the new revision is serving traffic. These checks are validation AFTER a

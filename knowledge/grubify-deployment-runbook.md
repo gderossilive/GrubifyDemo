@@ -33,6 +33,13 @@ Before dispatching the workflow, confirm:
    - (Optional fallback) `AZURE_CREDENTIALS` service-principal JSON.
 3. The target azd environment name and resource token are known.
 4. Region is `swedencentral` (SRE Agent preview constraint).
+5. If using PAT fallback, ensure PAT source is available:
+   - Direct env var: `GITHUB_PAT`, or
+   - Key Vault source via `GITHUB_PAT_SECRET_URI`, or
+   - Key Vault name+secret via `GITHUB_PAT_KEYVAULT_NAME` +
+     `GITHUB_PAT_SECRET_NAME`.
+6. For Key Vault-backed PAT reads, grant the executing identity Key Vault RBAC
+   role `Key Vault Secrets User` on the vault.
 
 ## Workflow inputs
 
@@ -86,6 +93,10 @@ intents (keywords: `deploy`, `release`, `ship`, `roll out`, `push`):
        `POST /repos/gderossilive/GrubifyDemo/actions/workflows/deploy-grubify.yml/dispatches`.
     Secondary path:
     - Use `github-mcp` workflow dispatch only if PAT fallback cannot start.
+    Resource-group note:
+    - The app RG may not always match `rg-grubify-app-${resource_token}` in
+       legacy environments. If that RG lookup fails, resolve the real RG from
+       the ACR named `cr${resource_token}` and continue with that RG.
 4. Poll the workflow run status until it reaches a terminal conclusion
    (`success`, `failure`, `cancelled`, or `timed_out`).
 5. Capture the run URL, conclusion, and duration for the release summary.
@@ -146,7 +157,8 @@ After a successful workflow run:
    - `GET /api/cart/{userId}` (use `demo-user`).
 3. Verify a single `POST /api/cart/demo-user/items` returns 2xx with a valid
    cart body.
-4. Confirm the new revision is active in Container Apps and is receiving
+4. Verify `POST /api/orders` returns `201`.
+5. Confirm the new revision is active in Container Apps and is receiving
    traffic via Log Analytics or App Insights.
 
 If any baseline check fails, treat it as a deployment validation failure,
