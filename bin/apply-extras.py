@@ -44,11 +44,6 @@ def get_token() -> str:
             errors.append(str(exc))
     raise RuntimeError("Could not get SRE data-plane token:\n" + "\n".join(errors))
 
-
-def get_arm_token() -> str:
-    return az("account", "get-access-token", "--query", "accessToken", "-o", "tsv")
-
-
 def resolve_endpoint(resource_group: str, agent_name: str, subscription: str | None) -> str:
     args = [
         "resource",
@@ -127,19 +122,6 @@ def http_call(method: str, url: str, token: str, body: bytes | None = None, cont
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
 
-
-def arm_call(method: str, url: str, token: str, body: bytes | None = None) -> tuple[int, bytes]:
-    request = urllib.request.Request(url, data=body, method=method)
-    request.add_header("Authorization", f"Bearer {token}")
-    if body is not None:
-        request.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return response.status, response.read()
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read()
-
-
 def build_multipart(field_name: str, file_name: str, content: bytes, content_type: str) -> tuple[bytes, str]:
     boundary = f"----grubify-sre-{uuid.uuid4().hex}"
     chunks = [
@@ -210,22 +192,11 @@ def install_github_pat(endpoint: str, token: str, dry_run: bool) -> None:
     raise RuntimeError(f"GitHub PAT install failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
 
 
-def apply_github_pat_connector(
-    resource_group: str,
-    agent_name: str,
-    subscription: str | None,
-    identity: str,
-    github_repos: list[dict[str, Any]],
-    dry_run: bool,
-) -> None:
+def apply_github_pat_connector(endpoint: str, token: str, github_repos: list[dict[str, Any]], dry_run: bool) -> None:
     github_pat = os.environ.get("GITHUB_PAT")
     if not github_pat:
         print("    GitHub auth: no GITHUB_PAT set; cannot apply PAT connector")
         return
-    if not resource_group or not agent_name:
-        print("    GitHub auth: agent name/RG unavailable; cannot apply PAT connector")
-        return
-
     repo_spec = (github_repos[0].get("spec") or {}) if github_repos else {}
     repo_url = (repo_spec.get("url") or "gderossilive/GrubifyDemo").rstrip("/")
     if repo_url.startswith("https://github.com/"):
@@ -240,28 +211,12 @@ def apply_github_pat_connector(
         print("    GitHub auth: would apply PAT-backed connector/github")
         return
 
-    arm_token = get_arm_token()
-    sub = subscription or az("account", "show", "--query", "id", "-o", "tsv")
-    base_url = (
-        f"https://management.azure.com/subscriptions/{sub}/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.App/agents/{agent_name}/connectors/github?api-version={SRE_AGENT_API_VERSION}"
-    )
-
-    status, response = arm_call("GET", base_url, arm_token)
-    if status == 200:
-        existing = json.loads(response.decode("utf-8"))
-        existing_type = ((existing.get("properties") or {}).get("dataConnectorType") or "")
-        if existing_type and existing_type != "GitHubPat":
-            delete_status, delete_response = arm_call("DELETE", base_url, arm_token)
-            if delete_status not in {200, 202, 204}:
-                raise RuntimeError(f"GitHub connector delete failed (HTTP {delete_status}): {delete_response.decode(errors='replace')[:500]}")
-
     connector_body = json.dumps({
+        "name": "github",
+        "type": "AgentConnector",
         "properties": {
-            "name": "github",
             "dataConnectorType": "GitHubPat",
             "dataSource": "github-pat",
-            "identity": identity,
             "extendedProperties": {
                 "owner": owner,
                 "repository": repo_name,
@@ -269,7 +224,7 @@ def apply_github_pat_connector(
             },
         },
     }).encode("utf-8")
-    status, response = arm_call("PUT", base_url, arm_token, connector_body)
+    status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/connectors/github", token, connector_body)
     if status not in {200, 201, 202, 204}:
         raise RuntimeError(f"GitHub PAT connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
     print("    applied connector/github (GitHubPat)")
@@ -281,9 +236,6 @@ def apply_github_repos(
     repos: list[dict[str, Any]],
     identity: str,
     dry_run: bool,
-    resource_group: str = "",
-    agent_name: str = "",
-    subscription: str | None = None,
 ) -> None:
     github_repos = [repo for repo in repos if (repo.get("spec") or {}).get("type", "github").lower() == "github"]
     if not github_repos:
@@ -297,7 +249,7 @@ def apply_github_repos(
     enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
     if enable_github_auth:
         if os.environ.get("GITHUB_PAT"):
-            apply_github_pat_connector(resource_group, agent_name, subscription, identity, github_repos, dry_run)
+            apply_github_pat_connector(endpoint, token, github_repos, dry_run)
         elif not dry_run:
             connector_body = json.dumps({
                 "name": "github",
@@ -392,7 +344,7 @@ def main() -> int:
     if not args.skip_subagents:
         apply_subagents(endpoint, token, extras.get("subagents") or [], args.dry_run)
     if not args.skip_repos:
-        apply_github_repos(endpoint, token, extras.get("repos") or [], identity, args.dry_run, resource_group, agent_name, subscription)
+        apply_github_repos(endpoint, token, extras.get("repos") or [], identity, args.dry_run)
 
     if args.skip_verify:
         print("  Verify       : skipped")
