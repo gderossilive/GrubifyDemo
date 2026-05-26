@@ -34,8 +34,11 @@ Workflow:
    - Send repeated `POST /api/cart/demo-user/items` requests using the
      payload documented in the tests runbook.
    - Respect the runbook's maximum request count and maximum duration.
+   - Use the runbook's sustained alert-trigger profile (parallel workers,
+     low sleep) unless the operator explicitly asks for a lighter run.
    - Stop early when any of the expected stop conditions is met:
-     - HTTP 5xx responses begin to appear.
+     - HTTP 5xx volume reaches alert evidence threshold (at least 6 total 5xx
+       responses in the current run, matching alert condition `>5`).
      - Container App revision restarts.
      - Cart endpoint memory-leak log lines appear
        (e.g., `Analytics cache: Added request data`, `Cache size: ... MB`).
@@ -48,11 +51,12 @@ Reporting:
 
 Produce a structured test report including:
 - Baseline smoke check results.
-- Load trigger configuration (request count, payload, target URL).
+- Load trigger configuration (total request cap, payload, target URL,
+  workers/concurrency, sleep, elapsed time).
 - Observed evidence (cache-growth logs, rising memory, HTTP 5xx,
   container restart, alert firing) with timestamps.
-- Whether expected incident-trigger evidence appeared, and after how many
-  requests / how long.
+- Whether expected incident-trigger evidence appeared, including 5xx total,
+  request/error ratio, and after how many requests / how long.
 - Next step (recommend handoff to incident-handler when expected evidence
   appears).
 
@@ -63,4 +67,7 @@ Guardrails:
   - Baseline failures = deployment validation failed.
   - Post-trigger failures = expected demo evidence, hand off to
     incident-handler.
+- Do not stop at first 5xx unless the operator explicitly requests a smoke
+  stress test. Default behavior is to gather enough 5xx volume to satisfy the
+  configured alert condition (`>5`).
 - Never modify infrastructure, never call write tools.
