@@ -242,7 +242,14 @@ def build_parameters(agent_config: dict[str, Any], connectors_config: dict[str, 
     content = agent_config.get("content") or {}
     knowledge_dir = PROJECT_DIR / content.get("knowledgePath", "knowledge")
     toggles = connectors_config.get("toggles") or {}
-    connectors = connectors_config.get("connectors", []) + build_knowledge_connector_entries(knowledge_dir)
+    # Knowledge files are uploaded via the data-plane /api/v1/agentmemory/upload path
+    # (see apply-extras.py). The ARM-level KnowledgeText connectors are redundant and
+    # show as "Connecting" in the SRE portal, so they are skipped unless explicitly
+    # opted in via ENABLE_KNOWLEDGE_CONNECTORS=true.
+    enable_knowledge_connectors = os.environ.get("ENABLE_KNOWLEDGE_CONNECTORS", "false").lower() in {"1", "true", "yes"}
+    connectors = list(connectors_config.get("connectors", []))
+    if enable_knowledge_connectors:
+        connectors.extend(build_knowledge_connector_entries(knowledge_dir))
     return {
         "metadata": {
             "schema": "grubify-sre-agent-v2.parameters/v1",

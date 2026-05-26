@@ -200,7 +200,12 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
         print("  Code repos : none")
         return
     print(f"  Code repos : {len(github_repos)} GitHub repo(s)")
-    if not dry_run:
+    # The OAuth-based 'github' connector shows as Disconnected in the SRE portal when
+    # PAT install is unavailable, so skip it by default. Set
+    # ENABLE_GITHUB_AUTH_CONNECTOR=true to opt back in (e.g. when OAuth sign-in is
+    # configured manually in the portal).
+    enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
+    if not dry_run and enable_github_auth:
         install_github_pat(endpoint, token, dry_run)
         connector_body = json.dumps({
             "name": "github",
@@ -215,6 +220,8 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
         if status not in {200, 201, 202, 204}:
             raise RuntimeError(f"GitHub connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
         print("    applied connector/github")
+    elif not dry_run:
+        print("    skipped connector/github (set ENABLE_GITHUB_AUTH_CONNECTOR=true to enable)")
     for repo in github_repos:
         spec = repo.get("spec") or {}
         name = repo.get("name") or Path(spec.get("url", "").rstrip("/")).name
