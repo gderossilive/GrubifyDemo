@@ -119,6 +119,66 @@ python3 bin/assemble-agent.py
 python3 bin/apply-extras.py
 ```
 
+## Step 5b: Install GitHub auth for deployment-manager
+
+The `deployment-manager` subagent dispatches GitHub Actions via a `GitHubPat` connector.
+This connector is **not created by `azd up`** — it must be applied separately using the
+`gh` CLI token (or a dedicated PAT with `repo` + `workflow` scopes).
+
+```bash
+# Grab the active gh CLI token (already authenticated as gderossilive)
+PAT=$(gh auth token)
+azd env set GITHUB_PAT "$PAT"
+
+set -a && eval "$(azd env get-values)" && set +a
+ENABLE_GITHUB_AUTH_CONNECTOR=true python3 bin/apply-extras.py \
+  --skip-knowledge --skip-subagents --skip-skills
+```
+
+Expected output:
+```
+  Code repos : 1 GitHub repo(s)
+    applied connector/github (GitHubPat)
+    applied repo/GrubifyDemo
+```
+
+Verify:
+```bash
+AGENT_EP=$(azd env get-values | grep SRE_AGENT_ENDPOINT | cut -d= -f2 | tr -d '"')
+TOKEN=$(az account get-access-token --resource https://azuresre.ai --query accessToken -o tsv)
+curl -s "$AGENT_EP/api/v2/extendedAgent/connectors/github" \
+  -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys, json
+p = json.load(sys.stdin).get('properties', {})
+print('type:', p.get('dataConnectorType'))
+tok = (p.get('extendedProperties') or {}).get('accessToken', '')
+print('token present:', bool(tok))
+"
+```
+
+Also grant `SRE Agent Administrator` to both agent managed identities (otherwise
+the subagent gets 403 when reading its own connector keys at runtime):
+
+```bash
+SCOPE=$(az resource show \
+  -g "rg-grubify-sre-$TOKEN" -n "sre-agent-grubify" \
+  --resource-type Microsoft.App/agents \
+  --api-version 2025-05-01-preview --query id -o tsv)
+
+for id in $(az resource show \
+  -g "rg-grubify-sre-$TOKEN" -n "sre-agent-grubify" \
+  --resource-type Microsoft.App/agents \
+  --api-version 2025-05-01-preview \
+  --query "identity.userAssignedIdentities | values(@)[].principalId" -o tsv); do
+  echo "Granting SRE Agent Administrator to $id"
+  az role assignment create \
+    --assignee-object-id "$id" \
+    --assignee-principal-type ServicePrincipal \
+    --role "SRE Agent Administrator" \
+    --scope "$SCOPE"
+done
+```
+
 ## Step 6: Validate runtime resources
 
 ```bash
@@ -181,11 +241,30 @@ Fix:
 2. Run `python3 bin/apply-extras.py` to push `/api/v2/extendedAgent/skills/*`.
 3. Hard refresh SRE portal.
 
+### D) deployment-manager gets 401/403 on GitHub dispatch
+Cause: `connector/github` is `GitHubOAuth` (no PAT) or agent identities lack SRE Agent Administrator.
+
+Fix:
+1. Run Step 5b to install `GitHubPat` connector.
+2. Grant `SRE Agent Administrator` to both agent managed identities (see Step 5b).
+3. If `azd deploy` was never run, images default to placeholder — run `azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT cr<token>.azurecr.io && azd deploy`.
+
+### E) Container apps still serve default welcome page after `azd up`
+Cause: ACR empty — remote builds were skipped or registry endpoint env var was missing.
+
+Fix:
+```bash
+azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "cr${TOKEN}.azurecr.io"
+azd deploy --no-prompt
+```
+
 ## Success criteria
 
 - [ ] New app RG and SRE RG have correct token suffix
 - [ ] `azd up` is `Succeeded`
 - [ ] User has `SRE Agent Administrator` on SRE Agent resource
 - [ ] SRE content applied successfully (knowledge + 6 subagents + 2 skills)
-- [ ] API and frontend container apps are running
+- [ ] API and frontend container apps are running with real Grubify images
+- [ ] `connector/github` is type `GitHubPat` with non-empty `accessToken`
+- [ ] Both agent managed identities have `SRE Agent Administrator` on SRE Agent resource
 - [ ] SRE portal shows expected configuration after refresh

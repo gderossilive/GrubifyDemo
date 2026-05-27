@@ -238,21 +238,53 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
     # ENABLE_GITHUB_AUTH_CONNECTOR=true to opt back in (e.g. when OAuth sign-in is
     # configured manually in the portal).
     enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
+    github_pat = os.environ.get("GITHUB_PAT")
     if not dry_run and enable_github_auth:
-        install_github_pat(endpoint, token, dry_run)
-        connector_body = json.dumps({
-            "name": "github",
-            "type": "AgentConnector",
-            "properties": {
-                "dataConnectorType": "GitHubOAuth",
-                "dataSource": "github-oauth",
-                "identity": identity,
-            },
-        }).encode("utf-8")
-        status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/connectors/github", token, connector_body)
-        if status not in {200, 201, 202, 204}:
-            raise RuntimeError(f"GitHub connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
-        print("    applied connector/github")
+        if github_pat:
+            # PAT is available: create a GitHubPat connector so deployment-manager can
+            # read it directly via the data-plane connector endpoint (PAT fallback path).
+            # Changing connector type requires delete-first if an incompatible type exists.
+            existing_status, existing_body = http_call("GET", f"{endpoint}/api/v2/extendedAgent/connectors/github", token)
+            if existing_status == 200:
+                try:
+                    existing_type = json.loads(existing_body).get("properties", {}).get("dataConnectorType", "")
+                except Exception:
+                    existing_type = ""
+                if existing_type and existing_type != "GitHubPat":
+                    del_status, _ = http_call("DELETE", f"{endpoint}/api/v2/extendedAgent/connectors/github", token)
+                    if del_status not in {200, 202, 204}:
+                        raise RuntimeError(f"Could not delete existing GitHub connector (HTTP {del_status}) before re-creating as GitHubPat")
+                    print(f"    deleted old connector/github (was {existing_type})")
+            connector_body = json.dumps({
+                "name": "github",
+                "type": "AgentConnector",
+                "properties": {
+                    "dataConnectorType": "GitHubPat",
+                    "dataSource": "github-pat",
+                    "identity": identity,
+                    "extendedProperties": {"accessToken": github_pat},
+                },
+            }).encode("utf-8")
+            status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/connectors/github", token, connector_body)
+            if status not in {200, 201, 202, 204}:
+                raise RuntimeError(f"GitHub PAT connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
+            print("    applied connector/github (GitHubPat)")
+        else:
+            # No PAT: fall back to OAuth connector (requires manual sign-in in portal).
+            install_github_pat(endpoint, token, dry_run)
+            connector_body = json.dumps({
+                "name": "github",
+                "type": "AgentConnector",
+                "properties": {
+                    "dataConnectorType": "GitHubOAuth",
+                    "dataSource": "github-oauth",
+                    "identity": identity,
+                },
+            }).encode("utf-8")
+            status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/connectors/github", token, connector_body)
+            if status not in {200, 201, 202, 204}:
+                raise RuntimeError(f"GitHub connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
+            print("    applied connector/github (GitHubOAuth)")
     elif not dry_run:
         print("    skipped connector/github (set ENABLE_GITHUB_AUTH_CONNECTOR=true to enable)")
     for repo in github_repos:
