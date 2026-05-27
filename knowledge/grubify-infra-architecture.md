@@ -258,6 +258,20 @@ If `GITHUB_PAT` is present, the deployment also configures repository access for
 
 The default target repository is `${GITHUB_USER}/GrubifyDemo` when `GITHUB_REPO` is not set. Set `GITHUB_REPO` explicitly for forks or alternate demo repositories.
 
+The SRE Agent `github` OAuth Code Repository connector created by
+`bin/apply-extras.py` is skipped by default (`ENABLE_GITHUB_AUTH_CONNECTOR=false`).
+The `GrubifyDemo` repo entry is still applied; with the auth connector skipped it
+shows as **Failed** in the SRE portal until you authenticate GitHub OAuth from
+**Builder → Connectors** or opt in with `ENABLE_GITHUB_AUTH_CONNECTOR=true`.
+Subagents that go through `github-mcp` + `GITHUB_PAT` (issue-triager, code-analyzer)
+work independently of this connector.
+
+Likewise, the assembler no longer emits `KnowledgeText` ARM connectors for each
+markdown file in `knowledge/` (`ENABLE_KNOWLEDGE_CONNECTORS=false` by default).
+Those files are still uploaded as proper **Knowledge sources** through the
+data-plane `/api/v1/agentmemory/upload` endpoint and remain searchable via
+`SearchMemory`.
+
 ---
 
 ## GitHub Repository Mapping

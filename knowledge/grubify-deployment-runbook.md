@@ -63,6 +63,14 @@ The `github-mcp` connector uses a fine-grained GitHub PAT scoped to
 After rotation, push the new value to the agent via
 `python3 bin/apply-extras.py` (loads `GITHUB_PAT` from `.env`).
 
+Note: the SRE Agent OAuth-style `github` Code Repository connector that
+`apply-extras.py` previously created is **skipped by default** (see
+`ENABLE_GITHUB_AUTH_CONNECTOR` in the main README). The `github-mcp` connector
+and its PAT remain the supported path for repository write access from
+subagents. Set `ENABLE_GITHUB_AUTH_CONNECTOR=true` only if you have manually
+registered/authenticated the GitHub OAuth connector in the SRE Agent portal
+for your environment.
+
 ## Baseline post-deploy validation
 
 Baseline validation checks and failure handling are now defined in the

@@ -110,6 +110,51 @@ deployment artifacts. Common overrides include `SRE_AGENT_RESOURCE_GROUP`,
 `TEAMS_GROUP_ID`, `TEAMS_CHANNEL_ID`, `SERVICENOW_ASSIGNMENT_GROUP`, and
 `SERVICENOW_INDEXING_LOOKBACK_DAYS`.
 
+#### Opt-in connector toggles
+
+Two SRE Agent connectors are **skipped by default** because they show as
+`Disconnected`/`Connecting` in the preview portal and add no value beyond the
+working data-plane equivalents:
+
+| Env var | Default | Effect when `true` |
+| --- | --- | --- |
+| `ENABLE_GITHUB_AUTH_CONNECTOR` | `false` | Re-creates the `github` OAuth connector under **Code Repository** (PUT `/api/v2/extendedAgent/connectors/github`). The `GrubifyDemo` repo entry references it as `authConnectorName: github` and will show as **Failed** in the portal until this connector exists and is authenticated. |
+| `ENABLE_KNOWLEDGE_CONNECTORS` | `false` | Re-adds 9 redundant `knowledge-*` ARM connectors of type `KnowledgeText` under **Other**. Knowledge files in `knowledge/` are uploaded as proper **Knowledge sources** via `/api/v1/agentmemory/upload` regardless of this toggle. |
+
+Leave both at the default unless you specifically need the portal entries.
+When they were previously created on the agent, clean them up with:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+SRE_RG=rg-grubify-sre-<token>
+for c in $(az rest --method get \
+    --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$SRE_RG/providers/Microsoft.App/agents/sre-agent-grubify/connectors?api-version=2025-05-01-preview" \
+    --query "value[?name=='github' || starts_with(name,'knowledge-')].name" -o tsv); do
+  az rest --method delete --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$SRE_RG/providers/Microsoft.App/agents/sre-agent-grubify/connectors/$c?api-version=2025-05-01-preview"
+done
+```
+
+#### SRE Agent Administrator role (required on fresh envs)
+
+The `azd up` postdeploy hook calls SRE data-plane APIs that enforce a custom
+role. ARM Owner is not enough; the signed-in user (or service principal) must
+hold `SRE Agent Administrator` on the agent resource. Grant it once after the
+first `azd up`:
+
+```bash
+SRE_ID=$(az resource show -g rg-grubify-sre-<token> -n sre-agent-grubify \
+  --resource-type Microsoft.App/agents --query id -o tsv)
+az role assignment create \
+  --assignee $(az ad signed-in-user show --query id -o tsv) \
+  --role "SRE Agent Administrator" \
+  --scope "$SRE_ID"
+```
+
+After granting the role, re-run `./scripts/deploy-sre-agent.sh` (or
+`azd hooks run postdeploy`) to complete the knowledge upload, subagent apply,
+and ServiceNow wiring. Without the role you will see
+`HTTP 403: Access denied by PDP` during the knowledge upload step.
+
 For the validated `grubify-agt` environment, run with the matching app/SRE
 resource groups and governance function URL:
 

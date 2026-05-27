@@ -125,11 +125,6 @@ def render_agent_yaml(yaml_path: Path, replacements: dict[str, str], governance:
     data = yaml.safe_load(raw) or {}
     spec = data.get("spec", data)
     prompt_file = spec.pop("system_prompt_file", None)
-    skill_files = spec.pop("skill_files", spec.pop("skills_files", []))
-    if isinstance(skill_files, str):
-        skill_files = [skill_files]
-
-    prompt_sections: list[str] = []
     if prompt_file:
         prompt_path = (yaml_path.parent / prompt_file).resolve()
         if not prompt_path.exists():
@@ -137,19 +132,7 @@ def render_agent_yaml(yaml_path: Path, replacements: dict[str, str], governance:
         prompt = prompt_path.read_text(encoding="utf-8")
         for old, new in replacements.items():
             prompt = prompt.replace(old, new)
-        prompt_sections.append(prompt.rstrip("\n"))
-
-    for skill_file in skill_files:
-        skill_path = (yaml_path.parent / str(skill_file)).resolve()
-        if not skill_path.exists():
-            raise FileNotFoundError(f"Missing skill file for {yaml_path.name}: {skill_path}")
-        skill_text = skill_path.read_text(encoding="utf-8")
-        for old, new in replacements.items():
-            skill_text = skill_text.replace(old, new)
-        prompt_sections.append("Skill:\n" + skill_text.rstrip("\n"))
-
-    if prompt_sections:
-        spec["system_prompt"] = "\n\n---\n\n".join(prompt_sections)
+        spec["system_prompt"] = prompt.rstrip("\n")
 
     hooks = resolve_hooks(spec.get("hooks") or {}, yaml_path, governance)
     if hooks:
