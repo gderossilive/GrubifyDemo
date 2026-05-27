@@ -45,7 +45,7 @@ Before dispatch:
 4. Confirm auth prerequisites are present (OIDC or required GitHub secrets).
 5. Confirm target environment_name and resource_token.
 6. Confirm target region matches `${EXPECTED_REGION}`.
-7. If PAT fallback is used, ensure PAT source exists via one of:
+7. If `${CONNECTOR_REF}` is configured for PAT-backed auth, ensure PAT source exists via one of:
    - GITHUB_PAT
    - GITHUB_PAT_SECRET_URI
    - GITHUB_PAT_KEYVAULT_NAME + GITHUB_PAT_SECRET_NAME
@@ -61,6 +61,8 @@ Before dispatch:
 - If no supported local credential source exists (for example, `gh auth token`
    unavailable and `GH_TOKEN`/`GITHUB_TOKEN`/`GITHUB_PAT` unset), report
    authenticated dispatch as unavailable in-shell and stop.
+- In SRE Agent runtime, do not assume local shell environment variables (for
+   example `.env`) are available. Prefer server-side connector execution.
 
 ## Connector and Repo Semantics
 
@@ -104,8 +106,9 @@ Treat these as deploy intents: deploy, release, ship, roll out, push, promote, c
 3. Dispatch workflow with mandatory path preference:
     - Primary: server-side connector use with `${CONNECTOR_REF}`
        (GitHubPat or OAuth), where secrets are resolved only by backend runtime.
-   - Secondary: github-mcp workflow dispatch only when PAT fallback cannot start.
-4. For PAT fallback:
+   - Secondary: github-mcp workflow dispatch only when server-side connector
+     dispatch is blocked and cannot start.
+4. For server-side connector dispatch:
     - Invoke backend connector-use path (for example, dispatch API with
        `connectorRef=${CONNECTOR_REF}`).
    - Do not read connector secret material from data-plane APIs.
@@ -115,7 +118,10 @@ Treat these as deploy intents: deploy, release, ship, roll out, push, promote, c
     - Dispatch GitHub `workflow_dispatch` for `${WORKFLOW_FILE}` on
        `${WORKFLOW_REF}` via backend connector-use operation.
    - Poll workflow run via GitHub REST or backend status endpoint until terminal.
-5. If legacy environment app RG lookup fails for rg-grubify-app-${resource_token}, resolve actual RG from ACR cr${resource_token}.
+5. For secondary fallback (github-mcp), use it only after recording the first
+   blocking condition for connector dispatch (for example 401/403/404/validation
+   failure) and include that blocker in reporting.
+6. If legacy environment app RG lookup fails for rg-grubify-app-${resource_token}, resolve actual RG from ACR cr${resource_token}.
 
 ## Hard Evidence Rule
 
