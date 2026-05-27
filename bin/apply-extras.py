@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -175,6 +176,38 @@ def apply_subagents(endpoint: str, token: str, entries: list[dict[str, Any]], dr
         print(f"    applied {entry['name']}")
 
 
+def apply_skills(endpoint: str, token: str, entries: list[dict[str, Any]], dry_run: bool) -> None:
+    if not entries:
+        print("  Skills    : none")
+        return
+    print(f"  Skills    : {len(entries)} skill(s)")
+    for entry in entries:
+        skill_name = entry.get("name")
+        if not skill_name:
+            raise RuntimeError(f"Invalid skill entry (missing name): {entry}")
+
+        if dry_run:
+            print(f"    would apply {skill_name}")
+            continue
+
+        body = json.dumps({
+            "name": skill_name,
+            "type": "Skill",
+            "properties": {
+                "description": entry.get("description", ""),
+                "tools": entry.get("tools", []),
+                "skillContent": entry.get("content", ""),
+                "additionalFiles": entry.get("additionalFiles", []),
+            },
+        }).encode("utf-8")
+
+        encoded_name = urllib.parse.quote(skill_name, safe="")
+        status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/skills/{encoded_name}", token, body)
+        if status not in {200, 201, 202, 204}:
+            raise RuntimeError(f"Skill apply failed for {skill_name} (HTTP {status}): {response.decode(errors='replace')[:500]}")
+        print(f"    applied {skill_name}")
+
+
 def install_github_pat(endpoint: str, token: str, dry_run: bool) -> None:
     github_pat = os.environ.get("GITHUB_PAT")
     if not github_pat:
@@ -257,6 +290,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-knowledge", action="store_true")
+    parser.add_argument("--skip-skills", action="store_true")
     parser.add_argument("--skip-subagents", action="store_true")
     parser.add_argument("--skip-repos", action="store_true")
     parser.add_argument("--skip-verify", action="store_true", help="Reserved for parity with the PI-Buddy v2 workflow.")
@@ -295,6 +329,8 @@ def main() -> int:
 
     if not args.skip_knowledge:
         upload_knowledge(endpoint, token, extras.get("knowledge") or [], args.dry_run)
+    if not args.skip_skills:
+        apply_skills(endpoint, token, extras.get("skills") or [], args.dry_run)
     if not args.skip_subagents:
         apply_subagents(endpoint, token, extras.get("subagents") or [], args.dry_run)
     if not args.skip_repos:

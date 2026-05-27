@@ -21,6 +21,15 @@ A modern food delivery application built with React TypeScript frontend and .NET
 
 This guide shows how to deploy Grubify with **both backend versions** (v1 with memory leak, v2 with payment failures) for testing Azure SRE Agent scenarios.
 
+### Team Skills
+
+For a concise, repeatable fresh environment bootstrap runbook, use:
+
+- `.github/skills/grubify-fresh-env-setup/SKILL.md`
+
+This skill captures the validated sequence for new azd environments, including
+token/resource-group fixes, SRE Agent RBAC, and postdeploy/apply-extras recovery.
+
 ## 📋 Prerequisites
 
 Before deploying Grubify, ensure you have the following tools installed:

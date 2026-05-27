@@ -251,6 +251,45 @@ def build_repo_entries(connectors_config: dict[str, Any]) -> list[dict[str, Any]
     }]
 
 
+def build_skill_entries(agents_dir: Path, requested_agents: list[str], replacements: dict[str, str]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    for agent_name in requested_agents:
+        yaml_path = agents_dir / f"{agent_name}.yaml"
+        if not yaml_path.exists():
+            continue
+
+        data = load_yaml(yaml_path)
+        spec = data.get("spec", data)
+        skill_files = spec.get("skill_files") or []
+        if not isinstance(skill_files, list):
+            raise ValueError(f"skill_files in {yaml_path.name} must be a list")
+
+        for skill_file in skill_files:
+            skill_path = (yaml_path.parent / str(skill_file)).resolve()
+            if not skill_path.exists():
+                raise FileNotFoundError(f"Missing skill file for {yaml_path.name}: {skill_path}")
+
+            skill_name = skill_path.stem
+            if skill_name in seen_names:
+                continue
+
+            skill_content = skill_path.read_text(encoding="utf-8")
+            for old, new in replacements.items():
+                skill_content = skill_content.replace(old, new)
+
+            entries.append({
+                "name": skill_name,
+                "source": str(skill_path.relative_to(PROJECT_DIR)),
+                "description": f"Skill contract for {agent_name}",
+                "content": skill_content.rstrip("\n"),
+            })
+            seen_names.add(skill_name)
+
+    return entries
+
+
 def load_expected_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -315,6 +354,8 @@ def build_extras(agent_config: dict[str, Any], connectors_config: dict[str, Any]
         rendered_yaml = render_agent_yaml(yaml_path, replacements, governance)
         subagents.append(build_subagent_entry(yaml_path, rendered_yaml))
 
+    skills = build_skill_entries(agents_dir, requested_agents, replacements)
+
     return {
         "metadata": {
             "schema": "grubify-sre-agent-v2.extras/v1",
@@ -327,7 +368,7 @@ def build_extras(agent_config: dict[str, Any], connectors_config: dict[str, Any]
         "knowledge": build_knowledge_entries(knowledge_dir),
         "incidentPlatforms": build_incident_platform_entries(incident_platforms_dir),
         "expectedConfig": expected_config,
-        "skills": [],
+        "skills": skills,
         "subagents": subagents,
         "tools": [],
         "hooks": [],
