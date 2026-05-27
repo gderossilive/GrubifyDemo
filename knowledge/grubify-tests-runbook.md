@@ -52,22 +52,18 @@ report it, and STOP. Do not start the load trigger.
 
 Only run this phase after baseline smoke checks pass.
 
-### Loop limits
+Execution instructions and code for this phase are now maintained in the
+tests-manager skill:
 
-- Maximum requests: **1500**
-- Maximum duration: **15 minutes**
-- Concurrency: **6** workers (parallel clients)
-- Sleep between requests (per worker): **0.1s**
+- `sre-config/agents/skills/tests-manager-load-trigger.skill.md`
 
-These defaults are tuned to reliably produce enough backend pressure to trip
-the HTTP 5xx alert condition (`Requests` with `statusCodeCategory=5xx` > 5).
-For a lighter run, reduce workers and raise sleep only with operator approval.
+Treat the skill as the source of truth for:
 
-### Procedure
-
-Send repeated `POST {API_URL}/api/cart/demo-user/items` requests using the
-sample payload, until any stop condition is met or the loop limits are
-reached.
+- loop limits and sustained-load defaults
+- stop conditions aligned with alert threshold
+- ExecutePythonCode request pattern
+- telemetry observation cadence
+- structured report contract
 
 ### Expected evidence
 
@@ -85,59 +81,13 @@ expect to observe:
 
 ### Stop conditions
 
-Stop the loop as soon as one of these is observed:
+Use the stop conditions defined in the tests-manager skill.
 
-- HTTP 5xx volume reaches alert evidence threshold:
-  - at least **6** total HTTP 5xx responses observed in this run, or
-  - the configured Azure Monitor alert is observed as fired.
-- Container App revision restart.
-- Configured alert fires.
-- Loop limit (request count or duration) reached.
-
-### Sample Python pattern (for ExecutePythonCode)
-
-```python
-import time
-import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-API_URL = "<provided by operator>"
-ENDPOINT = f"{API_URL}/api/cart/demo-user/items"
-PAYLOAD = {"foodItemId": 1, "quantity": 1, "specialInstructions": "load-trigger"}
-MAX_REQUESTS = 1500
-MAX_DURATION_SECONDS = 15 * 60
-WORKERS = 6
-SLEEP_SECONDS = 0.1
-TARGET_5XX = 6
-
-start = time.time()
-sent = 0
-errors_5xx = 0
-
-def hit_once(_):
-  try:
-    r = requests.post(ENDPOINT, json=PAYLOAD, timeout=10)
-    return r.status_code
-  except Exception:
-    return 599
-
-with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-  while sent < MAX_REQUESTS and time.time() - start <= MAX_DURATION_SECONDS and errors_5xx < TARGET_5XX:
-    burst = min(WORKERS, MAX_REQUESTS - sent)
-    futures = [pool.submit(hit_once, i) for i in range(burst)]
-    sent += burst
-    for f in as_completed(futures):
-      status = f.result()
-      if status >= 500:
-        errors_5xx += 1
-    time.sleep(SLEEP_SECONDS)
-
-print({"sent": sent, "errors_5xx": errors_5xx, "elapsed_sec": int(time.time() - start)})
-```
+The sample code now lives in the tests-manager skill.
 
 ## Telemetry checks during the loop
 
-Periodically (e.g., every 50 requests or 30 seconds) query:
+Periodically query telemetry as defined by the tests-manager skill.
 
 - Log Analytics for `Analytics cache` / `Cache size` log lines.
 - App Insights `requests` table for HTTP 5xx on `/api/cart/.../items`.

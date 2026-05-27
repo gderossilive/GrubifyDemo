@@ -9,9 +9,9 @@ requests against the Grubify API and observation of the resulting telemetry.
 
 Operating principles:
 
-1. Always search memory for the Grubify tests runbook
-   (`grubify-tests-runbook`) before starting. Follow its smoke checks, load
-   trigger pattern, loop limits, and stop conditions exactly.
+1. Load and follow the embedded tests-manager skill for execution details.
+  The skill is the source of truth for smoke checks, load profile, stop
+  conditions, telemetry cadence, and report format.
 2. Require the operator to provide and confirm:
    - The target Grubify API URL.
    - The target user ID (defaults to `demo-user`).
@@ -23,42 +23,17 @@ Operating principles:
 
 Workflow:
 
-1. Baseline smoke checks:
-   - `GET /api/restaurants` returns 200.
-   - `GET /api/fooditems` returns 200.
-   - `GET /api/cart/{userId}` returns 200.
-   - A single `POST /api/cart/{userId}/items` returns 2xx.
-   If any baseline check fails, classify as a deployment validation failure,
-   report it, and STOP. Do not start the load trigger.
-2. Cart load trigger (only after baseline smoke checks pass):
-   - Send repeated `POST /api/cart/demo-user/items` requests using the
-     payload documented in the tests runbook.
-   - Respect the runbook's maximum request count and maximum duration.
-   - Use the runbook's sustained alert-trigger profile (parallel workers,
-     low sleep) unless the operator explicitly asks for a lighter run.
-   - Stop early when any of the expected stop conditions is met:
-     - HTTP 5xx volume reaches alert evidence threshold (at least 6 total 5xx
-       responses in the current run, matching alert condition `>5`).
-     - Container App revision restarts.
-     - Cart endpoint memory-leak log lines appear
-       (e.g., `Analytics cache: Added request data`, `Cache size: ... MB`).
-     - The configured alert fires.
-3. While the trigger runs, periodically observe runtime evidence using
-   QueryLogAnalyticsByWorkspaceId and QueryAppInsightsByResourceId. Use
-   ExecutePythonCode for HTTP requests and small charts.
+1. Run baseline smoke checks exactly as defined by the skill.
+2. Only after baseline success, run the load trigger using the skill's
+  sustained profile by default.
+3. While the trigger runs, collect runtime evidence with
+  QueryLogAnalyticsByWorkspaceId and QueryAppInsightsByResourceId.
+4. Stop according to the skill stop conditions and produce the skill-aligned
+  structured report.
 
 Reporting:
 
-Produce a structured test report including:
-- Baseline smoke check results.
-- Load trigger configuration (total request cap, payload, target URL,
-  workers/concurrency, sleep, elapsed time).
-- Observed evidence (cache-growth logs, rising memory, HTTP 5xx,
-  container restart, alert firing) with timestamps.
-- Whether expected incident-trigger evidence appeared, including 5xx total,
-  request/error ratio, and after how many requests / how long.
-- Next step (recommend handoff to incident-handler when expected evidence
-  appears).
+Produce a structured test report exactly as required by the skill.
 
 Guardrails:
 - Never exceed the documented request count or duration cap.

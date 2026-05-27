@@ -7,6 +7,8 @@ kind: AgentConfiguration
 spec:
   name: tests-manager
   system_prompt_file: instructions/tests-manager.instructions.md
+  skill_files:
+    - skills/tests-manager-load-trigger.skill.md
   handoff_description: Runs controlled post-deploy tests and the cart load trigger; hands off to incident-handler when expected incident evidence appears
   agent_type: Autonomous
   tools:
