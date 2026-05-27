@@ -51,6 +51,8 @@ Workflow:
    - `github-mcp` only if PAT fallback cannot start.
 3. Enforce the hard evidence rule from the skill:
    - deployment is valid only with `run_id` and `run_url`.
+   - if requested workflow inputs cannot be proven for the observed run,
+     report: `healthy environment observed, requested release inputs unproven`.
 4. Poll and report status according to the skill.
 5. On `success`, run baseline post-deploy validation exactly as defined by the
    skill.
@@ -63,6 +65,8 @@ Reporting:
 
 After dispatching or completing a deployment, produce the structured release
 summary exactly as required by the skill.
+If blocked, report blocked path(s), first failing status/code, and next
+operator action required.
 
 Guardrails:
 - Never escalate privileges, never call `RunAzCliWriteCommands`, and never
@@ -71,6 +75,13 @@ Guardrails:
 - Never call connector read APIs to extract PAT/secret values.
 - Use connector metadata/status reads only (Connected/Ready), and use
    server-side connector execution for workflow dispatch.
+- On first HTTP 401 from GitHub workflow query/dispatch, stop that auth path;
+   do not repeat unauthenticated retries.
+- On HTTP 403 for connector read/use (`${CONNECTOR_REF}`), classify connector
+   fallback as blocked for the session and stop retrying that path.
+- If no supported local GitHub credential source exists in-shell, stop and
+   report authenticated dispatch unavailable instead of probing equivalent
+   unauthenticated paths.
 - **Never claim a deploy succeeded without a real GitHub Actions run id and
    URL obtained from `github-mcp` or PAT fallback in the current
    conversation.** Reading

@@ -51,6 +51,17 @@ Before dispatch:
    - GITHUB_PAT_KEYVAULT_NAME + GITHUB_PAT_SECRET_NAME
 8. For Key Vault PAT read, executing identity must have Key Vault Secrets User.
 
+## Credential and Access Gates
+
+- If GitHub workflow APIs return HTTP 401 (Bad credentials), stop dispatch attempts on
+   that auth path immediately and report a blocked credential path.
+- Do not retry the same unauthenticated dispatch/query pattern after the first 401.
+- If connector read/use path for `${CONNECTOR_REF}` returns HTTP 403, classify the
+   connector fallback as blocked for this session and stop connector-based retries.
+- If no supported local credential source exists (for example, `gh auth token`
+   unavailable and `GH_TOKEN`/`GITHUB_TOKEN`/`GITHUB_PAT` unset), report
+   authenticated dispatch as unavailable in-shell and stop.
+
 ## Connector and Repo Semantics
 
 - Treat Notification connectors and Code Repository entries as separate surfaces.
@@ -112,6 +123,8 @@ A deployment is valid only with run_id and run_url obtained in the current conve
 Do not substitute Azure revision/image observations for dispatch evidence.
 Do not use gh auth status as a gate in this sandbox.
 Do not treat connector secret reads as valid evidence; only run_id/run_url and workflow status evidence count.
+If a run is visible but the requested `workflow_dispatch` inputs cannot be proven,
+report: "healthy environment observed, requested release inputs unproven".
 
 ## Monitoring and Terminal States
 
@@ -187,6 +200,15 @@ Produce structured summary with:
 - baseline checks pass/fail per item
 - next step (tests-manager handoff, rollback, or human review)
 - references: revision name, ACR image tag, App Insights resource ID, Log Analytics workspace ID
+
+When blocked or evidence is incomplete, include a short failure reason section with:
+
+- blocked path(s): `github-cli`, `github-rest`, `connector-ref`, or `local-shell-auth`
+- first failing HTTP status/code per blocked path
+- explicit next action required (for example, provide valid GitHub auth token,
+   restore connector permission, or re-run with backend connector execution)
+- evidence statement if needed: "healthy environment observed, requested release
+   inputs unproven"
 
 ## Guardrails
 
