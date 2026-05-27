@@ -134,6 +134,27 @@ def render_agent_yaml(yaml_path: Path, replacements: dict[str, str], governance:
             prompt = prompt.replace(old, new)
         spec["system_prompt"] = prompt.rstrip("\n")
 
+    skill_files = spec.pop("skill_files", None)
+    if skill_files:
+        if not isinstance(skill_files, list):
+            raise ValueError(f"skill_files in {yaml_path.name} must be a list")
+
+        skill_sections: list[str] = []
+        for skill_file in skill_files:
+            skill_path = (yaml_path.parent / str(skill_file)).resolve()
+            if not skill_path.exists():
+                raise FileNotFoundError(f"Missing skill file for {yaml_path.name}: {skill_path}")
+
+            skill_text = skill_path.read_text(encoding="utf-8")
+            for old, new in replacements.items():
+                skill_text = skill_text.replace(old, new)
+            skill_sections.append(f"Skill contract ({skill_path.name}):\n{skill_text.rstrip()}")
+
+        base_prompt = str(spec.get("system_prompt", "")).rstrip("\n")
+        skills_banner = "The following embedded skills are part of your execution contract. Follow them strictly."
+        merged_prompt = "\n\n".join([skills_banner, *skill_sections])
+        spec["system_prompt"] = f"{base_prompt}\n\n{merged_prompt}".strip()
+
     hooks = resolve_hooks(spec.get("hooks") or {}, yaml_path, governance)
     if hooks:
         spec["hooks"] = hooks
