@@ -7,6 +7,8 @@ kind: AgentConfiguration
 spec:
   name: deployment-manager
   system_prompt_file: instructions/deployment-manager.instructions.md
+  skill_files:
+    - skills/deployment-manager-release-orchestration.skill.md
   handoff_description: Orchestrates Grubify releases by dispatching GitHub Actions and validating baseline health, then hands off to tests-manager
   agent_type: Autonomous
   tools:
