@@ -81,6 +81,10 @@ Do not recommend PAT rotation when the live connector is intentionally
 portal OAuth sign-in or permissions and capture the concrete connector-use
 failure status.
 
+For `grubify-new02`, `connector/github` is intentionally `GitHubOAuth`. Do not
+recommend restoring `GitHubPat` for new02 unless the operator explicitly asks to
+switch back to PAT mode.
+
 ## Baseline post-deploy validation
 
 Baseline validation checks and failure handling are now defined in the
