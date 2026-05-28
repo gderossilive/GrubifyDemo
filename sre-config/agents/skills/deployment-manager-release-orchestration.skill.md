@@ -47,6 +47,10 @@ Before dispatch:
 3. For SRE data-plane API calls, use an access token with audience/resource
    `https://azuresre.ai`.
     - Token acquisition is a required precondition for connector reads/use.
+    - Check that the selected execution context can run `az` before attempting
+       token acquisition. `az: command not found` means the shell is
+       non-authoritative; it is not `status=no-token` and not a connector
+       blocker.
     - If token acquisition returns `status=no-token`, do not classify
        `${CONNECTOR_REF}` as unavailable and do not start GitHub fallback. Recover
        token acquisition first or stop with blocked path `sre-data-plane-token`.
@@ -80,14 +84,32 @@ Before dispatch:
    example `.env`) are available. Prefer server-side connector execution.
 - Use only an authoritative execution context for Azure data-plane and ARM
    evidence. If a shell cannot run `az` or returns `az: command not found`,
-   classify that shell as non-authoritative and continue only on a working Azure
-   CLI/backend connector path.
+   classify that shell as blocked path `non-authoritative-shell`, not
+   `sre-data-plane-token`; switch to a working Azure CLI/backend connector path.
+   Do not attempt GitHub fallback from a non-authoritative shell.
 
 ## Connector and Repo Semantics
 
 - Treat Notification connectors and Code Repository entries as separate surfaces.
 - `${CONNECTOR_REF}` readiness is a connector check; GitHub repository presence is
    a code-repo check.
+- `${CONNECTOR_REF}` may be `GitHubPat` or `GitHubOAuth`.
+   - For `GitHubPat`, connector metadata may include backend-resolved token
+      material, but do not read or print it.
+   - For `GitHubOAuth`, do not expect an access token in connector metadata;
+      require Connected/Ready status or a successful backend connector-use
+      operation instead.
+   - `GitHubOAuth` with `extendedProperties=null` is an expected metadata shape,
+      not `unexpected_type`, not `unexpected_type:GitHubOAuth`, and not proof that
+      connector dispatch is blocked.
+   - Do not require a "backend-readable" GitHub token for OAuth. OAuth is a
+      backend-managed connection; validate it by connector status or backend
+      connector-use behavior, not by readable secret material.
+   - Do not require "dispatch-capable PAT proof" when `dataConnectorType` is
+      `GitHubOAuth`. A PAT is not part of the OAuth connector contract.
+   - HTTP 200 connector metadata with `dataConnectorType=GitHubOAuth` means the
+      server-side connector path is still available for OAuth validation/use; it
+      is not a blocked connector path by itself.
 - UI may show both Teams and GitHub as "connected", while connector collection
    APIs may return only Teams and GitHub appears under repos.
 - Do not infer connector availability from connector count alone.
@@ -134,6 +156,12 @@ Treat these as deploy intents: deploy, release, ship, roll out, push, promote, c
      dispatch is blocked by a concrete connector read/use status and cannot
      start. Token acquisition failures are not connector status.
 5. For server-side connector dispatch:
+    - First prove the execution context is authoritative for Azure operations:
+       `az` must be available or an equivalent backend token/connector execution
+       path must be available.
+    - If the selected shell returns `az: command not found`, stop that shell path
+       as `non-authoritative-shell`, switch to a working Azure CLI/backend path,
+       and do not attempt GitHub fallback.
     - Acquire a valid SRE data-plane token for `https://azuresre.ai` before
        connector metadata/readiness checks.
     - If token acquisition fails with `status=no-token`, stop connector
@@ -142,7 +170,19 @@ Treat these as deploy intents: deploy, release, ship, roll out, push, promote, c
     - Invoke backend connector-use path (for example, dispatch API with
        `connectorRef=${CONNECTOR_REF}`).
    - Do not read connector secret material from data-plane APIs.
-    - Require backend evidence that `${CONNECTOR_REF}` is Connected/Ready.
+    - If connector metadata returns HTTP 200 with `dataConnectorType=GitHubOAuth`
+       and `extendedProperties=null`, continue to OAuth status/connector-use
+       validation. Do not classify this as `unexpected_type` and do not move to
+       GitHub REST/CLI fallback.
+    - Do not stop at metadata because OAuth lacks PAT proof. The next required
+       step is backend OAuth connector-use dispatch/validation.
+    - Require backend evidence that `${CONNECTOR_REF}` is Connected/Ready, or
+       for OAuth a successful backend connector-use validation that proves the
+       signed-in OAuth connection is usable.
+    - Block OAuth only on a concrete OAuth connector status/use failure, such as
+       Disconnected/Unauthorized/Forbidden status or backend connector-use HTTP
+       401/403/404/validation failure. Report that exact status as the first
+       failing connector status.
     - Separately require repo evidence that `${REPO_FULL_NAME}` is present/Ready in
        the code-repo surface.
     - Dispatch GitHub `workflow_dispatch` for `${WORKFLOW_FILE}` on
@@ -156,8 +196,8 @@ Treat these as deploy intents: deploy, release, ship, roll out, push, promote, c
    concrete connector read/use blocking condition for connector dispatch (for
    example connector read/use HTTP 401/403/404 or connector validation failure)
    and include that blocker in reporting. Do not use fallback after
-   `status=no-token`; that means the SRE data-plane token path must be restored
-   first.
+   `status=no-token` or `az: command not found`; those mean the SRE data-plane
+   token/context path must be restored first.
 8. If legacy environment app RG lookup fails for rg-grubify-app-${resource_token}, resolve actual RG from ACR cr${resource_token}.
 
 ## Hard Evidence Rule
@@ -246,7 +286,8 @@ Produce structured summary with:
 
 When blocked or evidence is incomplete, include a short failure reason section with:
 
-- blocked path(s): `github-cli`, `github-rest`, `connector-ref`, or `local-shell-auth`
+- blocked path(s): `github-cli`, `github-rest`, `connector-ref`,
+   `sre-data-plane-token`, `non-authoritative-shell`, or `local-shell-auth`
 - first failing HTTP status/code per blocked path
 - explicit next action required (for example, provide valid GitHub auth token,
    restore connector permission, or re-run with backend connector execution)
@@ -274,9 +315,15 @@ deployment result.
 - Never claim success without run_id and run_url evidence.
 - Never call connector read APIs to extract PAT/secret values.
 - Use connector metadata/status reads only (Connected/Ready), and use server-side connector execution for dispatch.
+- Never classify `dataConnectorType=GitHubOAuth` as unexpected. OAuth is valid
+   for `${CONNECTOR_REF}` even when `extendedProperties=null`.
+- Never require dispatch-capable PAT proof for `GitHubOAuth`; proceed to OAuth
+   connector-use validation instead.
 - Always pin Microsoft.App/agents reads to `2025-05-01-preview`.
 - Treat `status=no-token` as `sre-data-plane-token` blocked, not as connector
    unavailability.
+- Treat `az: command not found` as `non-authoritative-shell`, not
+   `sre-data-plane-token`.
 - Never use GitHub fallback until `${CONNECTOR_REF}` has a concrete connector
    read/use failure status.
 - Keep deployment evidence in one durable per-attempt directory.

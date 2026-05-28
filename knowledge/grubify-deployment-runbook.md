@@ -55,21 +55,31 @@ deployment-manager skill.
 Failure-path auto-handoff and exact payload shape are now defined in the
 deployment-manager skill.
 
-## PAT rotation
+## GitHub connector auth
 
-The `github-mcp` connector uses a fine-grained GitHub PAT scoped to
-`gderossilive/GrubifyDemo` with `actions:write`, `contents:read`,
-`issues:write`, `pull_requests:read`. Rotate quarterly. Owner: repo admin.
-After rotation, push the new value to the agent via
-`python3 bin/apply-extras.py` (loads `GITHUB_PAT` from `.env`).
+The deployment-manager primary path is server-side `connector/github`. The
+connector may be either `GitHubOAuth` or `GitHubPat`:
 
-Note: the SRE Agent OAuth-style `github` Code Repository connector that
-`apply-extras.py` previously created is **skipped by default** (see
-`ENABLE_GITHUB_AUTH_CONNECTOR` in the main README). The `github-mcp` connector
-and its PAT remain the supported path for repository write access from
-subagents. Set `ENABLE_GITHUB_AUTH_CONNECTOR=true` only if you have manually
-registered/authenticated the GitHub OAuth connector in the SRE Agent portal
-for your environment.
+- `GitHubOAuth`: preferred when the SRE Agent portal OAuth connection is signed
+	in and authorized for `gderossilive/GrubifyDemo`. Metadata normally has
+	`extendedProperties=null`; do not require readable PAT material or
+	"dispatch-capable PAT proof". Validate by Connected/Ready status or by a
+	backend connector-use dispatch/validation result.
+- `GitHubPat`: fallback/legacy mode using a fine-grained GitHub PAT scoped to
+	`gderossilive/GrubifyDemo` with `actions:write`, `contents:read`,
+	`issues:write`, `pull_requests:read`. Rotate quarterly. Owner: repo admin.
+
+To force OAuth during data-plane apply, set:
+
+```bash
+ENABLE_GITHUB_AUTH_CONNECTOR=true GITHUB_AUTH_CONNECTOR_TYPE=oauth python3 bin/apply-extras.py
+```
+
+To force PAT mode, set `GITHUB_AUTH_CONNECTOR_TYPE=pat` and provide `GITHUB_PAT`.
+Do not recommend PAT rotation when the live connector is intentionally
+`GitHubOAuth`; if OAuth dispatch fails, the next action is to complete/repair
+portal OAuth sign-in or permissions and capture the concrete connector-use
+failure status.
 
 ## Baseline post-deploy validation
 

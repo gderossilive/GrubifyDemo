@@ -54,18 +54,40 @@ Workflow:
    temp files.
 4. Treat shells where `az` is unavailable as non-authoritative for Azure
    evidence. Continue Azure validation only through a working Azure CLI/backend
-   connector context.
+   connector context. If a shell returns `az: command not found`, report blocked
+   path `non-authoritative-shell`; do not label it `sre-data-plane-token` and do
+   not use GitHub fallback from that shell.
 5. Before connector metadata/readiness checks, acquire an SRE data-plane token
-   for `https://azuresre.ai`. If acquisition returns `status=no-token`, do not
-   classify `${CONNECTOR_REF}` as unavailable and do not start GitHub fallback.
-   Report blocked path `sre-data-plane-token`, restore token acquisition, and
-   retry connector read/use before considering fallback.
+   for `https://azuresre.ai` only from an authoritative context where `az` or an
+   equivalent backend token path is available. If acquisition returns
+   `status=no-token`, do not classify `${CONNECTOR_REF}` as unavailable and do
+   not start GitHub fallback. Report blocked path `sre-data-plane-token`,
+   restore token acquisition, and retry connector read/use before considering
+   fallback.
 6. Dispatch with skill-defined path preference:
     - Server-side connector-use path first (`${CONNECTOR_REF}`), with
        secrets resolved only by backend runtime.
+   - Accept either `GitHubPat` or `GitHubOAuth` connector types. For OAuth,
+      never require or report an access token from connector metadata; require
+      Connected/Ready status or a successful backend connector-use validation.
+      `GitHubOAuth` with `extendedProperties=null` is expected OAuth metadata,
+      not `unexpected_type:GitHubOAuth`, and not a reason to use GitHub REST/CLI
+      fallback.
+   - For OAuth, do not require a backend-readable token. OAuth is backend-managed;
+      proceed to connector status or connector-use validation instead of looking
+      for secret material.
+   - For OAuth, never require "dispatch-capable PAT proof". A PAT is not part of
+      the OAuth connector contract. HTTP 200 connector metadata with
+      `dataConnectorType=GitHubOAuth` means the server-side connector path is
+      still available for OAuth status/use validation.
+   - Do not stop at OAuth metadata. Continue to backend OAuth connector-use
+      dispatch/validation, and block only on a concrete OAuth connector status or
+      connector-use failure such as Disconnected/Unauthorized/Forbidden or HTTP
+      401/403/404/validation failure.
    - `github-mcp` only after a concrete connector read/use failure status, such
       as connector HTTP 401/403/404 or validation failure. `status=no-token` is
-      not a connector status.
+      not a connector status, and `az: command not found` is a
+      non-authoritative shell status.
 7. After connector-backed workflow dispatch is accepted (HTTP 204 or equivalent),
    keep GitHub follow-up on connector-derived auth, authenticated github-mcp, or
    a verified backend status endpoint. Do not probe unauthenticated GitHub CLI or
@@ -96,6 +118,10 @@ Guardrails:
 - Never call connector read APIs to extract PAT/secret values.
 - Use connector metadata/status reads only (Connected/Ready), and use
    server-side connector execution for workflow dispatch.
+- Never classify `dataConnectorType=GitHubOAuth` or `extendedProperties=null` as
+   unexpected. They are valid OAuth connector metadata.
+- Never require dispatch-capable PAT proof for `GitHubOAuth`; continue to OAuth
+   connector status/use validation instead.
 - Always use Microsoft.App/agents API version `2025-05-01-preview` for SRE
    agent ARM reads.
 - Keep all per-attempt evidence in one durable directory and reference that path
@@ -107,6 +133,9 @@ Guardrails:
 - Treat `status=no-token` as blocked path `sre-data-plane-token`, not as
    connector unavailability. Restore token acquisition before retrying connector
    read/use.
+- Treat `az: command not found` as blocked path `non-authoritative-shell`, not
+   `sre-data-plane-token`. Switch to an authoritative Azure CLI/backend context
+   before token acquisition or connector checks.
 - Never use GitHub fallback until `${CONNECTOR_REF}` has a concrete connector
    read/use failure status.
 - If no supported local GitHub credential source exists in-shell, stop and

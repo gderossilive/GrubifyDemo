@@ -239,8 +239,13 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
     # configured manually in the portal).
     enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
     github_pat = os.environ.get("GITHUB_PAT")
+    auth_type = os.environ.get("GITHUB_AUTH_CONNECTOR_TYPE", "pat" if github_pat else "oauth").strip().lower()
+    if auth_type not in {"pat", "oauth"}:
+        raise RuntimeError("GITHUB_AUTH_CONNECTOR_TYPE must be 'pat' or 'oauth'")
     if not dry_run and enable_github_auth:
-        if github_pat:
+        if auth_type == "pat":
+            if not github_pat:
+                raise RuntimeError("GITHUB_AUTH_CONNECTOR_TYPE=pat requires GITHUB_PAT")
             # PAT is available: create a GitHubPat connector so deployment-manager can
             # read it directly via the data-plane connector endpoint (PAT fallback path).
             # Changing connector type requires delete-first if an incompatible type exists.
@@ -271,7 +276,17 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
             print("    applied connector/github (GitHubPat)")
         else:
             # No PAT: fall back to OAuth connector (requires manual sign-in in portal).
-            install_github_pat(endpoint, token, dry_run)
+            existing_status, existing_body = http_call("GET", f"{endpoint}/api/v2/extendedAgent/connectors/github", token)
+            if existing_status == 200:
+                try:
+                    existing_type = json.loads(existing_body).get("properties", {}).get("dataConnectorType", "")
+                except Exception:
+                    existing_type = ""
+                if existing_type and existing_type != "GitHubOAuth":
+                    del_status, _ = http_call("DELETE", f"{endpoint}/api/v2/extendedAgent/connectors/github", token)
+                    if del_status not in {200, 202, 204}:
+                        raise RuntimeError(f"Could not delete existing GitHub connector (HTTP {del_status}) before re-creating as GitHubOAuth")
+                    print(f"    deleted old connector/github (was {existing_type})")
             connector_body = json.dumps({
                 "name": "github",
                 "type": "AgentConnector",
