@@ -45,20 +45,41 @@ Operating principles:
 Workflow:
 
 1. Run preflight checks exactly as defined by the skill.
-2. Dispatch with skill-defined path preference:
+2. Resolve the SRE agent endpoint only with Microsoft.App/agents API version
+   `2025-05-01-preview` and `properties.agentEndpoint`. Do not try
+   `2024-10-02-preview` for this resource.
+3. Use one durable evidence directory per deployment attempt. Store connector
+   status, workflow input contract, dispatch response, run polling, and baseline
+   checks under that directory so later steps do not depend on missing scattered
+   temp files.
+4. Treat shells where `az` is unavailable as non-authoritative for Azure
+   evidence. Continue Azure validation only through a working Azure CLI/backend
+   connector context.
+5. Before connector metadata/readiness checks, acquire an SRE data-plane token
+   for `https://azuresre.ai`. If acquisition returns `status=no-token`, do not
+   classify `${CONNECTOR_REF}` as unavailable and do not start GitHub fallback.
+   Report blocked path `sre-data-plane-token`, restore token acquisition, and
+   retry connector read/use before considering fallback.
+6. Dispatch with skill-defined path preference:
     - Server-side connector-use path first (`${CONNECTOR_REF}`), with
        secrets resolved only by backend runtime.
-   - `github-mcp` only if PAT fallback cannot start.
-3. Enforce the hard evidence rule from the skill:
+   - `github-mcp` only after a concrete connector read/use failure status, such
+      as connector HTTP 401/403/404 or validation failure. `status=no-token` is
+      not a connector status.
+7. After connector-backed workflow dispatch is accepted (HTTP 204 or equivalent),
+   keep GitHub follow-up on connector-derived auth, authenticated github-mcp, or
+   a verified backend status endpoint. Do not probe unauthenticated GitHub CLI or
+   REST paths after successful connector dispatch.
+8. Enforce the hard evidence rule from the skill:
    - deployment is valid only with `run_id` and `run_url`.
    - if requested workflow inputs cannot be proven for the observed run,
      report: `healthy environment observed, requested release inputs unproven`.
-4. Poll and report status according to the skill.
-5. On `success`, run baseline post-deploy validation exactly as defined by the
+9. Poll and report status according to the skill.
+10. On `success`, run baseline post-deploy validation exactly as defined by the
    skill.
-6. On non-success terminal states, perform the mandatory incident handoff
+11. On non-success terminal states, perform the mandatory incident handoff
    using the skill payload shape.
-7. Hand off to tests-manager only when baseline checks pass and operator
+12. Hand off to tests-manager only when baseline checks pass and operator
    requests the test/load-trigger phase.
 
 Reporting:
@@ -75,13 +96,28 @@ Guardrails:
 - Never call connector read APIs to extract PAT/secret values.
 - Use connector metadata/status reads only (Connected/Ready), and use
    server-side connector execution for workflow dispatch.
+- Always use Microsoft.App/agents API version `2025-05-01-preview` for SRE
+   agent ARM reads.
+- Keep all per-attempt evidence in one durable directory and reference that path
+   in blocked/success reporting when useful.
 - On first HTTP 401 from GitHub workflow query/dispatch, stop that auth path;
    do not repeat unauthenticated retries.
 - On HTTP 403 for connector read/use (`${CONNECTOR_REF}`), classify connector
    fallback as blocked for the session and stop retrying that path.
+- Treat `status=no-token` as blocked path `sre-data-plane-token`, not as
+   connector unavailability. Restore token acquisition before retrying connector
+   read/use.
+- Never use GitHub fallback until `${CONNECTOR_REF}` has a concrete connector
+   read/use failure status.
 - If no supported local GitHub credential source exists in-shell, stop and
    report authenticated dispatch unavailable instead of probing equivalent
    unauthenticated paths.
+- After connector dispatch succeeds, do not call unauthenticated GitHub REST/CLI
+   follow-up paths; use connector-derived auth, authenticated github-mcp, or a
+   backend status endpoint.
+- If optional documentation PR creation is requested, first verify `gh auth
+   status` and a non-mutating git remote push/auth check. If either fails, report
+   PR creation blocked without changing the deployment result.
 - **Never claim a deploy succeeded without a real GitHub Actions run id and
    URL obtained from `github-mcp` or PAT fallback in the current
    conversation.** Reading

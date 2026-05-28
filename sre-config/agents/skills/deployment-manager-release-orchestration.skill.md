@@ -23,6 +23,7 @@ Resolve parameters in this order: operator input -> environment/config -> defaul
 - `DEFAULT_RELEASE_PROFILE` (default: `cart-leak-baseline`)
 - `DEFAULT_DEPLOY_MODE` (default: `deploy`)
 - `DEFAULT_USER_ID` for cart checks (default: `demo-user`)
+- `SRE_AGENT_API_VERSION` (required default: `2025-05-01-preview`)
 
 ## Release Profiles
 
@@ -40,8 +41,18 @@ Before dispatch:
 1. Validate `${WORKFLOW_FILE}` exists in `${REPO_FULL_NAME}`.
 2. Resolve SRE data-plane endpoint from agent resource `properties.agentEndpoint`
    (do not assume `properties.configuration.endpoint`).
+   - Use Microsoft.App/agents API version `2025-05-01-preview`.
+   - Do not attempt `2024-10-02-preview`; it is unsupported for this resource
+     and causes `NoRegisteredProviderFound` in the Grubify SRE environment.
 3. For SRE data-plane API calls, use an access token with audience/resource
    `https://azuresre.ai`.
+    - Token acquisition is a required precondition for connector reads/use.
+    - If token acquisition returns `status=no-token`, do not classify
+       `${CONNECTOR_REF}` as unavailable and do not start GitHub fallback. Recover
+       token acquisition first or stop with blocked path `sre-data-plane-token`.
+    - In an authoritative shell, explicitly request the token with
+       `az account get-access-token --resource https://azuresre.ai` before calling
+       `${CONNECTOR_REF}` data-plane APIs.
 4. Confirm auth prerequisites are present (OIDC or required GitHub secrets).
 5. Confirm target environment_name and resource_token.
 6. Confirm target region matches `${EXPECTED_REGION}`.
@@ -58,11 +69,19 @@ Before dispatch:
 - Do not retry the same unauthenticated dispatch/query pattern after the first 401.
 - If connector read/use path for `${CONNECTOR_REF}` returns HTTP 403, classify the
    connector fallback as blocked for this session and stop connector-based retries.
+- `status=no-token` while preparing to read/use `${CONNECTOR_REF}` is not a
+   connector read/use status. Treat it as blocked path `sre-data-plane-token`,
+   restore token acquisition, and retry the connector read/use path before any
+   GitHub fallback.
 - If no supported local credential source exists (for example, `gh auth token`
    unavailable and `GH_TOKEN`/`GITHUB_TOKEN`/`GITHUB_PAT` unset), report
    authenticated dispatch as unavailable in-shell and stop.
 - In SRE Agent runtime, do not assume local shell environment variables (for
    example `.env`) are available. Prefer server-side connector execution.
+- Use only an authoritative execution context for Azure data-plane and ARM
+   evidence. If a shell cannot run `az` or returns `az: command not found`,
+   classify that shell as non-authoritative and continue only on a working Azure
+   CLI/backend connector path.
 
 ## Connector and Repo Semantics
 
@@ -103,12 +122,23 @@ Treat these as deploy intents: deploy, release, ship, roll out, push, promote, c
 
 1. Resolve all five inputs.
 2. Echo resolved set and obtain confirmation unless explicitly skipped.
-3. Dispatch workflow with mandatory path preference:
+3. Create one durable evidence directory for this deployment attempt, named with
+   the environment/resource token and timestamp (for example
+   `/tmp/deploy-${resource_token}-${YYYYMMDDHHMMSS}`). Store connector status,
+   workflow contract, dispatch response, run polling, and baseline check outputs
+   there. Do not rely on scattered temporary files whose absence forces reruns.
+4. Dispatch workflow with mandatory path preference:
     - Primary: server-side connector use with `${CONNECTOR_REF}`
        (GitHubPat or OAuth), where secrets are resolved only by backend runtime.
    - Secondary: github-mcp workflow dispatch only when server-side connector
-     dispatch is blocked and cannot start.
-4. For server-side connector dispatch:
+     dispatch is blocked by a concrete connector read/use status and cannot
+     start. Token acquisition failures are not connector status.
+5. For server-side connector dispatch:
+    - Acquire a valid SRE data-plane token for `https://azuresre.ai` before
+       connector metadata/readiness checks.
+    - If token acquisition fails with `status=no-token`, stop connector
+       dispatch setup and report blocked path `sre-data-plane-token`; do not use
+       GitHub fallback in the same attempt.
     - Invoke backend connector-use path (for example, dispatch API with
        `connectorRef=${CONNECTOR_REF}`).
    - Do not read connector secret material from data-plane APIs.
@@ -118,10 +148,17 @@ Treat these as deploy intents: deploy, release, ship, roll out, push, promote, c
     - Dispatch GitHub `workflow_dispatch` for `${WORKFLOW_FILE}` on
        `${WORKFLOW_REF}` via backend connector-use operation.
    - Poll workflow run via GitHub REST or backend status endpoint until terminal.
-5. For secondary fallback (github-mcp), use it only after recording the first
-   blocking condition for connector dispatch (for example 401/403/404/validation
-   failure) and include that blocker in reporting.
-6. If legacy environment app RG lookup fails for rg-grubify-app-${resource_token}, resolve actual RG from ACR cr${resource_token}.
+6. Once connector-backed dispatch returns HTTP 204 or an equivalent accepted
+   dispatch response, do not switch to unauthenticated GitHub CLI/REST follow-up
+   paths. Continue run discovery and polling only through connector-derived auth,
+   github-mcp with valid auth, or a verified backend status endpoint.
+7. For secondary fallback (github-mcp), use it only after recording the first
+   concrete connector read/use blocking condition for connector dispatch (for
+   example connector read/use HTTP 401/403/404 or connector validation failure)
+   and include that blocker in reporting. Do not use fallback after
+   `status=no-token`; that means the SRE data-plane token path must be restored
+   first.
+8. If legacy environment app RG lookup fails for rg-grubify-app-${resource_token}, resolve actual RG from ACR cr${resource_token}.
 
 ## Hard Evidence Rule
 
@@ -216,6 +253,20 @@ When blocked or evidence is incomplete, include a short failure reason section w
 - evidence statement if needed: "healthy environment observed, requested release
    inputs unproven"
 
+## Optional Documentation PR Gate
+
+If a post-deploy documentation update or PR is requested, verify both before
+creating commits, pushing branches, or opening a PR:
+
+- `gh auth status` succeeds against `${REPO_FULL_NAME}` with a token accepted by
+   the GitHub API.
+- `git push --dry-run` or an equivalent non-mutating remote auth check succeeds
+   for the target remote/branch.
+
+If either check fails, report documentation PR creation as blocked and leave any
+local documentation changes unpushed. Do not let PR creation failure change the
+deployment result.
+
 ## Guardrails
 
 - Never call write-capable Azure mutation paths.
@@ -223,3 +274,13 @@ When blocked or evidence is incomplete, include a short failure reason section w
 - Never claim success without run_id and run_url evidence.
 - Never call connector read APIs to extract PAT/secret values.
 - Use connector metadata/status reads only (Connected/Ready), and use server-side connector execution for dispatch.
+- Always pin Microsoft.App/agents reads to `2025-05-01-preview`.
+- Treat `status=no-token` as `sre-data-plane-token` blocked, not as connector
+   unavailability.
+- Never use GitHub fallback until `${CONNECTOR_REF}` has a concrete connector
+   read/use failure status.
+- Keep deployment evidence in one durable per-attempt directory.
+- Ignore Azure evidence from shells where `az` is unavailable.
+- After connector-backed dispatch is accepted, avoid unauthenticated GitHub
+   follow-up paths.
+- Gate optional PR creation on verified `gh` and `git push` auth.
