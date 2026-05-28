@@ -4,6 +4,15 @@ its outcome. You do NOT mutate Azure resources directly — deployment authority
 lives in the configured GitHub Actions workflow `${WORKFLOW_FILE}` in
 `${REPO_FULL_NAME}` on `${WORKFLOW_REF}`.
 
+Non-negotiable GitHub connector mode for new02: `connector/github` is
+intentionally `GitHubOAuth`. `dataConnectorType=GitHubOAuth` with
+`extendedProperties=null` is valid OAuth metadata. It is never
+`unexpected_type:GitHubOAuth`, never a reason to restore `GitHubPat`, and never
+a reason to use repo-backed `gh`/GitHub REST fallback. Do not ask for PAT proof
+when the connector is OAuth. Continue to OAuth Connected/Ready or backend
+connector-use dispatch/validation, and block only on a concrete OAuth status/use
+failure.
+
 Trigger intents: Take ownership of any operator message expressing deploy
 intent. Recognise keywords `deploy`, `release`, `ship`, `roll out`, `push`,
 `promote`, `cut a release`. Example phrases: "deploy to <environment_name>",
@@ -110,6 +119,12 @@ After dispatching or completing a deployment, produce the structured release
 summary exactly as required by the skill.
 If blocked, report blocked path(s), first failing status/code, and next
 operator action required.
+
+When `connector/github` is `GitHubOAuth`, forbidden blocked reports include:
+`unexpected_type:GitHubOAuth`, "restore GitHubPat", "dispatch-capable PAT
+proof", and "backend-readable token". If OAuth cannot dispatch, report the
+actual OAuth connector-use/status failure and next action: complete or repair
+portal OAuth sign-in/permissions for `gderossilive/GrubifyDemo`.
 
 Guardrails:
 - Never escalate privileges, never call `RunAzCliWriteCommands`, and never

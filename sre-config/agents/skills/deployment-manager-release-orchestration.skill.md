@@ -2,6 +2,15 @@
 
 Use this skill as the execution contract for dispatching and validating Grubify releases.
 
+## Current GitHub Connector Mode
+
+For `grubify-new02`, `${CONNECTOR_REF}` is intentionally `GitHubOAuth`.
+`dataConnectorType=GitHubOAuth` with `extendedProperties=null` is valid OAuth
+metadata. Never classify it as `unexpected_type:GitHubOAuth`, never require
+dispatch-capable PAT proof, and never recommend restoring `GitHubPat` while this
+environment is configured for OAuth. OAuth must be validated by Connected/Ready
+status or backend connector-use dispatch/validation.
+
 ## Scope
 
 - Deployment authority is the configured GitHub Actions workflow
@@ -293,6 +302,12 @@ When blocked or evidence is incomplete, include a short failure reason section w
    restore connector permission, or re-run with backend connector execution)
 - evidence statement if needed: "healthy environment observed, requested release
    inputs unproven"
+
+For OAuth connectors, do not report `unexpected_type:GitHubOAuth`, do not ask for
+`GitHubPat` restoration, and do not ask for dispatch-capable PAT proof. If OAuth
+cannot dispatch, report the concrete OAuth connector-use/status failure and the
+next action: complete or repair SRE portal OAuth sign-in/permissions for
+`${REPO_FULL_NAME}`.
 
 ## Optional Documentation PR Gate
 
