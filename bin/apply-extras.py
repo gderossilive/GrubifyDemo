@@ -233,10 +233,11 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
         print("  Code repos : none")
         return
     print(f"  Code repos : {len(github_repos)} GitHub repo(s)")
-    # GitHub repo-backed agents need connector/github to exist. OAuth is the
-    # repeatable default; PAT mode is an explicit override for environments that
-    # intentionally configure GitHubSettings.PatTokenOverride-style behavior.
-    enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "true").lower() in {"1", "true", "yes"}
+    # Do not create a GitHubOAuth data-plane connector: the current backend marks
+    # that connector type as deprecated/disconnected. OAuth must be completed via
+    # the SRE portal/MCP GitHub connection. This script can still install a
+    # GitHubPat connector when an environment intentionally opts into PAT mode.
+    enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
     github_pat = os.environ.get("GITHUB_PAT")
     auth_type = os.environ.get("GITHUB_AUTH_CONNECTOR_TYPE", "oauth").strip().lower()
     if auth_type not in {"pat", "oauth"}:
@@ -244,7 +245,10 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
     if dry_run:
         if enable_github_auth:
             connector_type = "GitHubPat" if auth_type == "pat" else "GitHubOAuth"
-            print(f"    would apply connector/github ({connector_type})")
+            if auth_type == "oauth":
+                print("    would not apply connector/github (GitHubOAuth is deprecated; use portal/MCP OAuth)")
+            else:
+                print(f"    would apply connector/github ({connector_type})")
         else:
             print("    would skip connector/github (ENABLE_GITHUB_AUTH_CONNECTOR is false)")
     elif enable_github_auth:
@@ -280,31 +284,7 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
                 raise RuntimeError(f"GitHub PAT connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
             print("    applied connector/github (GitHubPat)")
         else:
-            # No PAT: fall back to OAuth connector (requires manual sign-in in portal).
-            existing_status, existing_body = http_call("GET", f"{endpoint}/api/v2/extendedAgent/connectors/github", token)
-            if existing_status == 200:
-                try:
-                    existing_type = json.loads(existing_body).get("properties", {}).get("dataConnectorType", "")
-                except Exception:
-                    existing_type = ""
-                if existing_type and existing_type != "GitHubOAuth":
-                    del_status, _ = http_call("DELETE", f"{endpoint}/api/v2/extendedAgent/connectors/github", token)
-                    if del_status not in {200, 202, 204}:
-                        raise RuntimeError(f"Could not delete existing GitHub connector (HTTP {del_status}) before re-creating as GitHubOAuth")
-                    print(f"    deleted old connector/github (was {existing_type})")
-            connector_body = json.dumps({
-                "name": "github",
-                "type": "AgentConnector",
-                "properties": {
-                    "dataConnectorType": "GitHubOAuth",
-                    "dataSource": "github-oauth",
-                    "identity": identity,
-                },
-            }).encode("utf-8")
-            status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/connectors/github", token, connector_body)
-            if status not in {200, 201, 202, 204}:
-                raise RuntimeError(f"GitHub connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
-            print("    applied connector/github (GitHubOAuth)")
+            print("    skipped connector/github (GitHubOAuth is deprecated; use portal/MCP OAuth or PAT mode)")
     elif not dry_run:
         print("    skipped connector/github (ENABLE_GITHUB_AUTH_CONNECTOR is false)")
     existing_repo_names_by_url: dict[str, str] = {}

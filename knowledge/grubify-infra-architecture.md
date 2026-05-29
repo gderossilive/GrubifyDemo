@@ -254,20 +254,18 @@ Core tools used by `incident-handler-agt`:
 
 ### GitHub-Enabled Subagents
 
-The deployment configures repository access for the SRE Agent through
-`connector/github` and the configured code repo entry. GitHub issue triage still
-depends on a valid GitHub token/connector and the `issue-triager` agent.
+The deployment configures the SRE Agent code repo entry. GitHub issue triage
+still depends on a valid GitHub token/connector and the `issue-triager` agent.
 
 The default target repository is `${GITHUB_USER}/GrubifyDemo` when `GITHUB_REPO` is not set. Set `GITHUB_REPO` explicitly for forks or alternate demo repositories.
 
-The SRE Agent `github` Code Repository connector created by
-`bin/apply-extras.py` is enabled by default
-(`ENABLE_GITHUB_AUTH_CONNECTOR=true`) and uses `GitHubOAuth` unless
-`GITHUB_AUTH_CONNECTOR_TYPE=pat` is explicitly set with `GITHUB_PAT`. OAuth
-metadata normally has no visible token. Authenticate GitHub OAuth from
-**Builder → Connectors** with `repo` and `workflow` scopes so repo-backed
-subagents and deployment-manager can use the connector repeatedly in new
-environments.
+The data-plane `GitHubOAuth` connector created by `bin/apply-extras.py` is not
+enabled by default because the current backend reports that connector type as
+deprecated/disconnected. Authenticate GitHub OAuth from **Builder → Connectors**
+or the GitHub MCP connection with `repo` and `workflow` scopes for the no-PAT
+path. For fully repeatable non-portal automation, explicitly set
+`ENABLE_GITHUB_AUTH_CONNECTOR=true`, `GITHUB_AUTH_CONNECTOR_TYPE=pat`, and
+`GITHUB_PAT` so `bin/apply-extras.py` creates a `GitHubPat` connector.
 
 Likewise, the assembler no longer emits `KnowledgeText` ARM connectors for each
 markdown file in `knowledge/` (`ENABLE_KNOWLEDGE_CONNECTORS=false` by default).

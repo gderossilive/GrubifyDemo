@@ -68,9 +68,35 @@ param sreIncidentManagementConfiguration object = {
   connectionName: 'azmonitor'
 }
 
+@description('Resource ID of an existing subnet delegated to Microsoft.App/environments for SRE Agent sandbox VNet integration. Leave empty to provision a new VNet and subnet.')
+param sreAgentExistingSubnetResourceId string = ''
+
+@description('Enable SRE Agent sandbox VNet integration. Leave disabled until the Microsoft.App/agents preview data plane supports the configured VNet shape without returning 404 for the agent site.')
+param enableSreAgentVnetIntegration bool = false
+
+@description('Name of the virtual network provisioned for SRE Agent sandbox VNet integration.')
+param sreAgentVnetName string = 'vnet-sre-agent-${resourceToken}'
+
+@description('Name of the subnet delegated for SRE Agent sandbox VNet integration.')
+param sreAgentSubnetName string = 'snet-sre-agent-${resourceToken}'
+
+@description('Name of the NAT Gateway used by SRE Agent sandbox VNet integration.')
+param sreAgentNatGatewayName string = 'nat-sre-agent-${resourceToken}'
+
+@description('Name of the public IP used by the SRE Agent sandbox NAT Gateway.')
+param sreAgentNatPublicIpName string = 'pip-sre-agent-nat-${resourceToken}'
+
+@description('Address prefix for the SRE Agent virtual network.')
+param sreAgentVnetAddressPrefix string = '10.80.0.0/16'
+
+@description('Address prefix for the delegated SRE Agent subnet.')
+param sreAgentSubnetAddressPrefix string = '10.80.0.0/24'
+
 var abbrs = loadJsonContent('abbreviations.json')
 var tags = { 'azd-env-name': environmentName }
 var useExistingEnv = !empty(existingContainerAppsEnvironmentId)
+var useSreAgentVnetIntegration = enableSreAgentVnetIntegration
+var useExistingSreAgentSubnet = useSreAgentVnetIntegration && !empty(sreAgentExistingSubnetResourceId)
 var existingEnvRg = useExistingEnv ? split(existingContainerAppsEnvironmentId, '/')[4] : 'placeholder'
 var existingEnvName = useExistingEnv ? last(split(existingContainerAppsEnvironmentId, '/')) : 'placeholder'
 var governanceFunctionName = 'func-agt-grubify-${resourceToken}'
@@ -205,6 +231,24 @@ module sreObservability 'core/host/sre-observability.bicep' = {
   }
 }
 
+// SRE Agent sandbox VNet integration subnet
+module sreAgentVnet 'core/host/sre-agent-vnet.bicep' = if (useSreAgentVnetIntegration && !useExistingSreAgentSubnet) {
+  name: 'sre-agent-vnet'
+  scope: sreRg
+  params: {
+    vnetName: sreAgentVnetName
+    subnetName: sreAgentSubnetName
+    natGatewayName: sreAgentNatGatewayName
+    natPublicIpName: sreAgentNatPublicIpName
+    location: location
+    vnetAddressPrefix: sreAgentVnetAddressPrefix
+    subnetAddressPrefix: sreAgentSubnetAddressPrefix
+    tags: tags
+  }
+}
+
+var sreAgentSubnetResourceId = useSreAgentVnetIntegration ? (useExistingSreAgentSubnet ? sreAgentExistingSubnetResourceId : sreAgentVnet!.outputs.subnetId) : ''
+
 // SRE Agent ARM resource and managed identity
 module sreAgent 'core/host/sre-agent.bicep' = {
   name: 'sre-agent'
@@ -222,6 +266,7 @@ module sreAgent 'core/host/sre-agent.bicep' = {
     accessLevel: sreAccessLevel
     actionMode: sreActionMode
     incidentManagementConfiguration: sreIncidentManagementConfiguration
+    subnetResourceId: sreAgentSubnetResourceId
     tags: tags
   }
 }
@@ -292,6 +337,8 @@ output SRE_AGENT_PRINCIPAL_ID string = sreAgent.outputs.agentPrincipalId
 output SRE_AGENT_IDENTITY_ID string = sreAgent.outputs.identityId
 output SRE_AGENT_IDENTITY_NAME string = sreAgent.outputs.identityName
 output SRE_AGENT_IDENTITY_PRINCIPAL_ID string = sreAgent.outputs.identityPrincipalId
+output SRE_AGENT_SUBNET_RESOURCE_ID string = sreAgentSubnetResourceId
+output SRE_AGENT_NAT_PUBLIC_IP string = !useSreAgentVnetIntegration || useExistingSreAgentSubnet ? '' : sreAgentVnet!.outputs.natPublicIpAddress
 output SRE_LOG_ANALYTICS_WORKSPACE_ID string = sreObservability.outputs.logAnalyticsWorkspaceId
 output SRE_APP_INSIGHTS_RESOURCE_ID string = sreObservability.outputs.applicationInsightsId
 output SRE_APP_INSIGHTS_APP_ID string = sreObservability.outputs.applicationInsightsAppId

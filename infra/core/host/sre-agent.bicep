@@ -44,6 +44,9 @@ param incidentManagementConfiguration object = {
 @description('Monthly SRE Agent unit limit.')
 param monthlyAgentUnitLimit int = 10000
 
+@description('Resource ID of the subnet delegated to Microsoft.App/environments for SRE Agent sandbox VNet integration. Leave empty to disable VNet integration.')
+param subnetResourceId string = ''
+
 @description('Tags applied to all resources.')
 param tags object = {}
 
@@ -68,7 +71,7 @@ resource sreAgent 'Microsoft.App/agents@2025-05-01-preview' = {
       '${identity.id}': {}
     }
   }
-  properties: {
+  properties: union({
     actionConfiguration: {
       accessLevel: accessLevel
       mode: actionMode
@@ -89,9 +92,15 @@ resource sreAgent 'Microsoft.App/agents@2025-05-01-preview' = {
     monthlyAgentUnitLimit: monthlyAgentUnitLimit
     upgradeChannel: 'Preview'
     experimentalSettings: {
+      EnableSandboxGroup: true
       EnableWorkspaceTools: true
+      EnableV2AgentLoop: true
     }
-  }
+  }, !empty(subnetResourceId) ? {
+    vnetConfiguration: {
+      subnetResourceId: subnetResourceId
+    }
+  } : {})
 }
 
 output agentName string = sreAgent.name

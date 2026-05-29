@@ -55,37 +55,35 @@ deployment-manager skill.
 Failure-path auto-handoff and exact payload shape are now defined in the
 deployment-manager skill.
 
-## GitHub connector auth
+## GitHub auth
 
-The deployment-manager primary path is server-side `connector/github`. The
-connector may be either `GitHubOAuth` or `GitHubPat`:
+The no-PAT path is the SRE portal/GitHub MCP OAuth connection, authorized for
+`gderossilive/GrubifyDemo` with `repo` and `workflow` scopes. A data-plane
+`GitHubOAuth` connector created with `bin/apply-extras.py` is not a valid
+replacement in the current backend; `/api/v2/extendedAgent/connectors/github/status`
+reports that connector type as deprecated/disconnected.
 
-- `GitHubOAuth`: preferred when the SRE Agent portal OAuth connection is signed
-	in and authorized for `gderossilive/GrubifyDemo`. Metadata normally has
-	`extendedProperties=null`; do not require readable PAT material or
-	"dispatch-capable PAT proof". Validate by Connected/Ready status or by a
-	backend connector-use dispatch/validation result.
-- `GitHubPat`: fallback/legacy mode using a fine-grained GitHub PAT scoped to
-	`gderossilive/GrubifyDemo` with `actions:write`, `contents:read`,
-	`issues:write`, `pull_requests:read`. Rotate quarterly. Owner: repo admin.
-
-OAuth is the default during data-plane apply:
+`bin/apply-extras.py` applies the code repo entry by default and skips
+`connector/github` unless explicitly enabled. If fully repeatable automation is
+needed without portal OAuth repair, use explicit PAT connector mode:
 
 ```bash
-ENABLE_GITHUB_AUTH_CONNECTOR=true GITHUB_AUTH_CONNECTOR_TYPE=oauth python3 bin/apply-extras.py
+ENABLE_GITHUB_AUTH_CONNECTOR=true GITHUB_AUTH_CONNECTOR_TYPE=pat GITHUB_PAT=<token-with-workflow-scope> python3 bin/apply-extras.py
 ```
 
-To opt out of creating `connector/github`, set
-`ENABLE_GITHUB_AUTH_CONNECTOR=false`. To force PAT mode, set
-`GITHUB_AUTH_CONNECTOR_TYPE=pat` and provide `GITHUB_PAT`.
-Do not recommend PAT rotation when the live connector is intentionally
-`GitHubOAuth`; if OAuth dispatch fails, the next action is to complete/repair
-portal OAuth sign-in or permissions and capture the concrete connector-use
-failure status.
+For fine-grained PATs, grant Actions read/write on the repository. For classic
+PATs, include `repo` and `workflow` scopes. If dispatch returns
+`401 Bad credentials`, report `connector-authorization` and repair portal/MCP
+OAuth or switch intentionally to PAT connector mode.
 
-For `grubify-new02`, `connector/github` is intentionally `GitHubOAuth`. Do not
-recommend restoring `GitHubPat` for new02 unless the operator explicitly asks to
-switch back to PAT mode.
+For arbitrary GitHub Actions workflows such as `.github/workflows/deploy-grubify.yml`,
+the current built-in `TriggerWorkflow` tool is demo-specific and should not be
+used unless the platform adds general workflow support. Prefer GitHub MCP if it
+exposes workflow dispatch; otherwise use `RunInTerminal` with `gh workflow run`.
+The `new02` SRE Agent sandbox has been observed with `/usr/bin/gh` version
+2.92.0. Do not use raw terminal `curl` against `api.github.com` unless an
+explicit workflow-capable token is available and every request includes an
+`Authorization` header.
 
 ## Baseline post-deploy validation
 

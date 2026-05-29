@@ -65,6 +65,17 @@ If dispatch fails because the token lacks workflow permission, report that the
 GitHub connector must be re-authorized or repaired. Do not ask for a separate
 PAT unless the operator intentionally wants to configure `PatTokenOverride`.
 
+If a raw terminal GitHub REST dispatch returns `401 Bad credentials` or
+`Requires authentication`, classify that terminal path as unauthenticated. Do
+not retry raw `curl` without an Authorization header. Prefer `github-mcp` for
+the no-secret path, then use `gh workflow run` when `gh` is installed. Use raw
+terminal REST only with an explicit workflow-capable token in that terminal
+context.
+
+If `/api/v2/extendedAgent/connectors/github/status` reports `GitHubOAuth` as
+deprecated or disconnected, do not use that data-plane connector as evidence of
+a valid OAuth auth path.
+
 ## Built-In Workflow Tool Caveat
 
 The built-in `TriggerWorkflow` tool is not a general GitHub Actions trigger in
@@ -123,12 +134,48 @@ Before dispatch:
 
 Use this preference order for general Grubify workflow dispatch:
 
-1. `RunInTerminal` with direct GitHub REST calls through `curl`:
+1. GitHub MCP connector (`github-mcp/*`), if available and authenticated. Use a
+  native workflow dispatch or repository API tool exposed by MCP. Record the MCP
+  tool name, input, response, and run metadata. This is the preferred no-secret
+  path because the MCP connector owns GitHub authentication.
+
+2. `RunInTerminal` with `gh workflow run` when `gh` is installed. The `new02`
+  SRE Agent sandbox has been observed with `/usr/bin/gh` version 2.92.0. Use
+  `command -v gh` and `gh --version` as a quick capability check, but do not run
+  `gh auth status` as a hard gate before dispatch.
+
+  ```bash
+  dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  gh workflow run "${WORKFLOW_FILE##*/}" \
+    --repo "${REPO_FULL_NAME}" \
+    --ref "${WORKFLOW_REF}" \
+    -f "environment_name=${environment_name}" \
+    -f "resource_token=${resource_token}" \
+    -f "release_version=${release_version}" \
+    -f "release_profile=${release_profile}" \
+    -f "deploy_mode=${deploy_mode}"
+  ```
+
+  A zero exit code from `gh workflow run` means the dispatch request was
+  accepted. If `gh` reports not logged in, missing workflow scope, 401, 403, or
+  Actions permission failure, stop this path and report connector authorization
+  evidence. Do not ask for a separate PAT by default; ask to repair/re-authorize
+  the connected GitHub repository/OAuth/PAT path with workflow permission.
+
+3. `RunInTerminal` with direct GitHub REST calls through `curl` only when an
+  explicit workflow-capable token exists in the terminal context as `GH_TOKEN`,
+  `GITHUB_TOKEN`, or `GITHUB_PAT`:
 
   ```bash
   owner="${REPO_FULL_NAME%%/*}"
   repo="${REPO_FULL_NAME#*/}"
   workflow="${WORKFLOW_FILE##*/}"
+  token="${GH_TOKEN:-${GITHUB_TOKEN:-${GITHUB_PAT:-}}}"
+  if [ -z "$token" ]; then
+    echo "No explicit terminal GitHub token available for REST dispatch" >&2
+    exit 2
+  fi
   dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
    body="$(python3 - \
@@ -159,28 +206,21 @@ PY
     -X POST \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
+     -H "Authorization: Bearer ${token}" \
     --data-binary "$body" \
     "https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches"
   ```
 
-  The platform outbound proxy injects the GitHub connector OAuth/PAT token for
-  `api.github.com`. Do not require local `gh` login, git credential helpers,
-  `GH_TOKEN`, `GITHUB_TOKEN`, `GITHUB_PAT`, or a locally readable OAuth token
-  before trying this path. `gh auth status`, `git credential fill`,
-  `credential.helper`, `http.*.extraheader`, and local `GH_`/`GITHUB_`
-  environment checks are diagnostic only and are not blockers.
+   Do not run raw GitHub REST `curl` without an `Authorization` header. A healthy
+   CodeRepo status proves the repository clone is ready; it does not prove raw
+   terminal REST calls are authenticated.
 
   HTTP 204 from the dispatch endpoint means the dispatch request was accepted.
   HTTP 401/403 means the connector/proxy credential path failed or lacks the
-  required `workflow` permission. HTTP 404 can mean the workflow filename/ref is
-  wrong or the connector cannot see the repo.
-
-2. GitHub MCP connector, if configured and authenticated. Use its native
-   workflow dispatch and run-tracking capabilities when available.
-
-3. `RunInTerminal` with `gh workflow run` only if it can run without requiring a
-  local login, or if an authenticated `gh` environment already exists. Do not
-  run `gh auth status` as a hard gate.
+  required `workflow` permission. For `401 Bad credentials`, stop this path and
+  report `connector-authorization`; do not retry local shell auth checks. HTTP
+  404 can mean the workflow filename/ref is wrong or the connector cannot see
+  the repo.
 
 4. Built-in `TriggerWorkflow` only when the target workflow filename is one of
    the supported demo-specific filenames listed above.
@@ -191,16 +231,18 @@ returned run metadata in the evidence directory. Never print secret values.
 If the actual dispatch call returns HTTP 401, HTTP 403, missing `workflow` scope,
 or Actions read/write permission failure, stop that path and report the exact
 authorization failure. Do not retry equivalent unauthenticated GitHub API calls.
+If terminal REST returns 401 and no Authorization header was used, report that
+the terminal path was unauthenticated and use MCP or an explicit terminal token.
 
 ## Run Discovery and Tracking
 
 After a successful dispatch request, discover the run for `${WORKFLOW_FILE}` and
 `${WORKFLOW_REF}` using one authenticated path:
 
-- GitHub REST through `api.github.com`, for example
+- GitHub MCP run listing/tracking.
+- Authenticated GitHub REST through `api.github.com`, for example
   `GET /repos/{owner}/{repo}/actions/workflows/{workflow}/runs?branch=${WORKFLOW_REF}&event=workflow_dispatch`,
   filtering for runs created at or after `dispatch_started_at`.
-- GitHub MCP run listing/tracking.
 - A verified backend status endpoint.
 - Built-in `TrackWorkflow` only for runs created through a supported built-in
   workflow path.
@@ -305,10 +347,10 @@ When blocked or evidence is incomplete, include:
 - evidence statement when applicable: `healthy environment observed, requested
   release inputs unproven`
 
-Never report `unexpected_type:GitHubOAuth`, never ask to restore `GitHubPat`, and
-never ask for dispatch-capable PAT proof when the GitHub connector is OAuth.
-Report OAuth failures as connector authorization or scope/permission issues with
-the actual failing status.
+Never report `unexpected_type:GitHubOAuth`. If the live GitHub OAuth connector is
+deprecated, disconnected, or returns `401 Bad credentials`, report the concrete
+connector authorization failure and recommend portal/MCP OAuth repair. Use PAT
+mode only when the operator intentionally opts into it for repeatable automation.
 
 ## Optional Documentation PR Gate
 

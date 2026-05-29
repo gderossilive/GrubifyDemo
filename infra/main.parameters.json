@@ -22,6 +22,30 @@
     },
     "existingContainerAppsEnvironmentId": {
       "value": "${AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
+    },
+    "sreAgentExistingSubnetResourceId": {
+      "value": "${EXISTING_SRE_AGENT_SUBNET_RESOURCE_ID}"
+    },
+    "enableSreAgentVnetIntegration": {
+      "value": "${ENABLE_SRE_AGENT_VNET_INTEGRATION=false}"
+    },
+    "sreAgentVnetName": {
+      "value": "vnet-sre-agent-${GRUBIFY_RESOURCE_TOKEN}"
+    },
+    "sreAgentSubnetName": {
+      "value": "snet-sre-agent-${GRUBIFY_RESOURCE_TOKEN}"
+    },
+    "sreAgentNatGatewayName": {
+      "value": "nat-sre-agent-${GRUBIFY_RESOURCE_TOKEN}"
+    },
+    "sreAgentNatPublicIpName": {
+      "value": "pip-sre-agent-nat-${GRUBIFY_RESOURCE_TOKEN}"
+    },
+    "sreAgentVnetAddressPrefix": {
+      "value": "${SRE_AGENT_VNET_ADDRESS_PREFIX=10.80.0.0/16}"
+    },
+    "sreAgentSubnetAddressPrefix": {
+      "value": "${SRE_AGENT_SUBNET_ADDRESS_PREFIX=10.80.0.0/24}"
     }
   }
 }

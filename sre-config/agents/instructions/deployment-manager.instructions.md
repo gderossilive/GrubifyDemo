@@ -59,6 +59,14 @@ A missing `workflow` scope is a connector authorization problem, not a request
 for an unrelated local PAT. Report the exact failing GitHub or connector status
 and ask for connector re-authorization or permission repair.
 
+If a raw terminal GitHub REST dispatch returns `401 Bad credentials` or
+`Requires authentication`, the terminal request was not authenticated. Do not
+retry raw `curl` without an `Authorization` header. Report the first failing
+status and move to `github-mcp` or `gh workflow run`. If neither an MCP dispatch
+tool nor `gh` is available, report blocked path `github-mcp` or `github-cli`
+with next action: repair MCP/connector auth, add a GitHub workflow dispatch
+tool, or provide an explicit workflow-capable terminal token.
+
 ## Dispatch Tool Policy
 
 The built-in GitHub workflow tools `TriggerWorkflow`, `TrackWorkflow`, and
@@ -75,24 +83,27 @@ Do not use built-in `TriggerWorkflow` for arbitrary Grubify workflows such as
 
 For general-purpose Grubify workflow dispatch, use this preference order:
 
-1. `RunInTerminal` with direct GitHub REST calls to `api.github.com` using
-  `curl`. The platform outbound proxy injects the connector OAuth/PAT token for
-  `api.github.com`; do not require local `gh` login, git credential helpers,
-  `GH_TOKEN`, `GITHUB_TOKEN`, or `GITHUB_PAT` before trying this path. Local
-  shell credential checks are diagnostic only and must not block dispatch.
-2. `github-mcp/*`, if available and authenticated, when it exposes workflow
-   dispatch and run tracking.
-3. `RunInTerminal` with `gh workflow run` only if it can run without requiring a
-  local login, or if an authenticated `gh` environment already exists. Do not
-  run `gh auth status` as a hard gate.
+1. `github-mcp/*`, if available and authenticated, when it exposes workflow
+  dispatch and run tracking. This is the preferred no-secret path because the
+  MCP connector owns GitHub authentication.
+2. `RunInTerminal` with `gh workflow run` when `gh` is installed. The SRE Agent
+  sandbox for `new02` has been observed with `/usr/bin/gh` version 2.92.0. Do
+  not run `gh auth status` as a hard gate before trying this path; execute the
+  dispatch and classify any resulting auth/scope error from `gh` as connector
+  authorization evidence. The platform GitHub credential path may authenticate
+  `gh` API calls through the connected repository/OAuth/PAT path.
+3. `RunInTerminal` with direct GitHub REST calls to `api.github.com` only when an
+  explicit workflow-capable token is available in that terminal context
+  (`GH_TOKEN`, `GITHUB_TOKEN`, or `GITHUB_PAT`). Include
+  `Authorization: Bearer <token>` or `Authorization: token <token>` in every
+  GitHub REST call. Do not run raw `curl` to GitHub without an Authorization
+  header; it will be unauthenticated even if the SRE repo status is Connected.
 4. Built-in `TriggerWorkflow` only for its supported demo workflow filenames.
 
-Use GitHub REST run-list/run-view calls through `api.github.com`, `github-mcp`,
-or a verified backend status endpoint to discover and track the run. Stop only
-after the actual dispatch or run-query call returns a credential or
-authorization failure. Do not block solely because `gh auth status`,
-`git credential fill`, `credential.helper`, `http.*.extraheader`, or local
-`GH_`/`GITHUB_` environment checks are empty.
+Use `github-mcp`, authenticated GitHub REST, authenticated `gh`, or a verified
+backend status endpoint to discover and track the run. A healthy CodeRepo status
+(`Repository cloned and ready`) proves repo clone readiness; it does not prove
+raw terminal REST calls are authenticated.
 
 ## Evidence Rules
 
@@ -136,6 +147,9 @@ incident-handler-core with the payload shape defined in the skill.
   repair connector scopes/permissions instead.
 - Do not claim `GitHubOAuth` with missing visible token material is broken.
   OAuth tokens are backend-managed and may not be readable from metadata.
+- If `/api/v2/extendedAgent/connectors/github/status` reports
+  `GitHubOAuth` as deprecated or disconnected, do not use that connector as
+  dispatch evidence. Ask for portal/MCP OAuth repair or explicit PAT mode.
 - Do not use built-in `TriggerWorkflow` for `${WORKFLOW_FILE}` while it remains
   restricted to demo-specific filenames.
 - Never call `RunAzCliWriteCommands`, force-push, bypass workflow validation, or

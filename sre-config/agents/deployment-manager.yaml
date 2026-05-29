@@ -21,3 +21,5 @@ spec:
     - RunInTerminal
   mcp_tools:
     - github-mcp/*
+  connectors:
+    - github

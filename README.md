@@ -66,6 +66,13 @@ azd init
 
 # Set Azure location (must be swedencentral — SRE Agent preview constraint)
 azd env set AZURE_LOCATION swedencentral
+
+# Set an explicit 5-character token before the first deploy
+TOKEN=<unique-5-char-token>
+azd env set GRUBIFY_RESOURCE_TOKEN "$TOKEN"
+azd env set AZURE_RESOURCE_GROUP "rg-grubify-app-$TOKEN"
+azd env set SRE_AGENT_RESOURCE_GROUP "rg-grubify-sre-$TOKEN"
+azd env set SRE_AGENT_NAME sre-agent-grubify
 ```
 
 ### 3. Deploy Infrastructure & Applications
@@ -81,6 +88,54 @@ derived from the environment name unless you override it. For the validated
 `grubify-agt` demo environment, the app resource group is
 `rg-grubify-app-agt01`, the API Container App is `ca-grubify-api-agt01`, and
 the frontend Container App is `ca-grubify-frontend-agt01`.
+
+SRE Agent sandbox VNet integration is opt-in because the current
+`Microsoft.App/agents` preview data plane can return `404` for the agent site
+when `vnetConfiguration.subnetResourceId` is set, even with a healthy delegated
+subnet, NAT Gateway, and `Unrestricted` sandbox egress. Leave it disabled for a
+working portal and data-plane endpoint. When enabled, the Bicep deployment
+provisions `vnet-sre-agent-${GRUBIFY_RESOURCE_TOKEN}` and
+`snet-sre-agent-${GRUBIFY_RESOURCE_TOKEN}` in the SRE resource group, delegates
+the subnet to `Microsoft.App/environments`, associates a NAT Gateway, and sets
+the agent `vnetConfiguration.subnetResourceId`.
+
+Optional SRE Agent network overrides:
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `ENABLE_SRE_AGENT_VNET_INTEGRATION` | `false` | Enables SRE Agent VNet integration. Keep disabled until the preview service supports the VNet shape without breaking the portal/data-plane site. |
+| `EXISTING_SRE_AGENT_SUBNET_RESOURCE_ID` | empty | Reuse an existing same-region subnet delegated to `Microsoft.App/environments` instead of provisioning a new VNet/subnet. Use only before creating the agent because `subnetResourceId` is immutable. |
+| `SRE_AGENT_VNET_ADDRESS_PREFIX` | `10.80.0.0/16` | Address space for the provisioned SRE Agent VNet. |
+| `SRE_AGENT_SUBNET_ADDRESS_PREFIX` | `10.80.0.0/24` | Address prefix for the delegated SRE Agent subnet. |
+
+If VNet integration is explicitly enabled, verify the agent network configuration after deployment:
+
+```bash
+az network vnet subnet show \
+	-g "rg-grubify-sre-$TOKEN" \
+	--vnet-name "vnet-sre-agent-$TOKEN" \
+	-n "snet-sre-agent-$TOKEN" \
+	--query "{addressPrefix:addressPrefix,delegations:delegations[].serviceName}" -o json
+
+az resource show \
+	-g "rg-grubify-sre-$TOKEN" \
+	-n sre-agent-grubify \
+	--resource-type Microsoft.App/agents \
+	--api-version 2025-05-01-preview \
+	--query "{state:properties.provisioningState,subnet:properties.vnetConfiguration.subnetResourceId,endpoint:properties.agentEndpoint}" -o json
+```
+
+After restoring or creating an agent, verify the site is serving before applying
+data-plane content:
+
+```bash
+TOK=$(az account get-access-token --resource https://azuresre.ai --query accessToken -o tsv)
+EP=$(az resource show -g "rg-grubify-sre-$TOKEN" -n sre-agent-grubify \
+	--resource-type Microsoft.App/agents --api-version 2025-05-01-preview \
+	--query properties.agentEndpoint -o tsv)
+curl -sS -o /dev/null -w "%{http_code}\n" "$EP/" -H "Authorization: Bearer $TOK"
+curl -sS -o /dev/null -w "%{http_code}\n" "$EP/api/v2/extendedAgent/agents" -H "Authorization: Bearer $TOK"
+```
 
 ### 4. Deploy the SRE Agent
 

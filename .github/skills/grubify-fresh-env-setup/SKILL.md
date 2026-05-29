@@ -46,12 +46,31 @@ azd env set AZURE_RESOURCE_GROUP "rg-grubify-app-$TOKEN"
 azd env set SRE_AGENT_RESOURCE_GROUP "rg-grubify-sre-$TOKEN"
 azd env set SRE_AGENT_NAME "sre-agent-grubify"
 azd env set AGT_FUNCTION_URL "https://func-agt-grubify-$TOKEN.azurewebsites.net"
+
+# SRE Agent sandbox VNet integration is opt-in while the preview data plane
+# returns 404 for VNet-enabled agent sites in this environment.
+azd env set ENABLE_SRE_AGENT_VNET_INTEGRATION false
+
+# Override CIDRs only if enabling VNet integration.
+azd env set SRE_AGENT_VNET_ADDRESS_PREFIX "10.80.0.0/16"
+azd env set SRE_AGENT_SUBNET_ADDRESS_PREFIX "10.80.0.0/24"
 ```
+
+With `ENABLE_SRE_AGENT_VNET_INTEGRATION=false`, the agent is created without
+`vnetConfiguration` so the portal and data-plane APIs serve normally. If VNet
+integration is explicitly enabled, the deployment provisions
+`vnet-sre-agent-$TOKEN` and `snet-sre-agent-$TOKEN` in the SRE resource group and
+associates the subnet with a NAT Gateway. Patch sandbox egress to `Unrestricted`
+for open outbound access after agent creation. To use an existing subnet instead,
+set `EXISTING_SRE_AGENT_SUBNET_RESOURCE_ID` before the first deploy. The subnet
+must be in the same Azure region as the agent, delegated to
+`Microsoft.App/environments`, and have outbound connectivity. Do not change this
+value after agent creation; the agent `subnetResourceId` is immutable.
 
 Validate:
 
 ```bash
-azd env get-values | grep -E "AZURE_ENV_NAME|GRUBIFY_RESOURCE_TOKEN|AZURE_RESOURCE_GROUP|SRE_AGENT_RESOURCE_GROUP|SRE_AGENT_NAME|AGT_FUNCTION_URL"
+azd env get-values | grep -E "AZURE_ENV_NAME|GRUBIFY_RESOURCE_TOKEN|AZURE_RESOURCE_GROUP|SRE_AGENT_RESOURCE_GROUP|SRE_AGENT_NAME|AGT_FUNCTION_URL|ENABLE_SRE_AGENT_VNET_INTEGRATION|SRE_AGENT_.*ADDRESS_PREFIX"
 ```
 
 ## Step 3: Deploy infra + apps
@@ -70,6 +89,38 @@ Verify app and SRE RG names are correct:
 
 ```bash
 az group list --query "[?contains(name, 'rg-grubify-app-$TOKEN') || contains(name, 'rg-grubify-sre-$TOKEN')].name" -o tsv
+```
+
+If VNet integration is enabled, verify the SRE Agent delegated subnet and sandbox egress settings:
+
+```bash
+az network vnet subnet show \
+  -g "rg-grubify-sre-$TOKEN" \
+  --vnet-name "vnet-sre-agent-$TOKEN" \
+  -n "snet-sre-agent-$TOKEN" \
+  --query "{addressPrefix:addressPrefix,delegations:delegations[].serviceName}" -o json
+
+az resource show \
+  -g "rg-grubify-sre-$TOKEN" \
+  -n "sre-agent-grubify" \
+  --resource-type Microsoft.App/agents \
+  --api-version 2025-05-01-preview \
+  --query "{provisioningState:properties.provisioningState,subnet:properties.vnetConfiguration.subnetResourceId,endpoint:properties.agentEndpoint}" -o json
+```
+
+For any fresh or restored agent, verify the portal and data-plane route before applying content:
+
+```bash
+TOK=$(az account get-access-token --resource https://azuresre.ai --query accessToken -o tsv)
+EP=$(az resource show \
+  -g "rg-grubify-sre-$TOKEN" \
+  -n "sre-agent-grubify" \
+  --resource-type Microsoft.App/agents \
+  --api-version 2025-05-01-preview \
+  --query properties.agentEndpoint -o tsv)
+
+curl -sS -o /dev/null -w "%{http_code}\n" "$EP/" -H "Authorization: Bearer $TOK"
+curl -sS -o /dev/null -w "%{http_code}\n" "$EP/api/v2/extendedAgent/agents" -H "Authorization: Bearer $TOK"
 ```
 
 ## Step 4: Grant SRE Agent Administrator to the operator
