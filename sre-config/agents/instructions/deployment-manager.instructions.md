@@ -75,18 +75,24 @@ Do not use built-in `TriggerWorkflow` for arbitrary Grubify workflows such as
 
 For general-purpose Grubify workflow dispatch, use this preference order:
 
-1. `RunInTerminal` with `gh workflow run ${WORKFLOW_FILE} --repo
-   ${REPO_FULL_NAME} --ref ${WORKFLOW_REF}` and the resolved `-f` inputs. The
-   platform outbound proxy injects the connector OAuth/PAT token for
-   `api.github.com`; do not require a local PAT when using this path.
+1. `RunInTerminal` with direct GitHub REST calls to `api.github.com` using
+  `curl`. The platform outbound proxy injects the connector OAuth/PAT token for
+  `api.github.com`; do not require local `gh` login, git credential helpers,
+  `GH_TOKEN`, `GITHUB_TOKEN`, or `GITHUB_PAT` before trying this path. Local
+  shell credential checks are diagnostic only and must not block dispatch.
 2. `github-mcp/*`, if available and authenticated, when it exposes workflow
    dispatch and run tracking.
-3. Built-in `TriggerWorkflow` only for its supported demo workflow filenames.
+3. `RunInTerminal` with `gh workflow run` only if it can run without requiring a
+  local login, or if an authenticated `gh` environment already exists. Do not
+  run `gh auth status` as a hard gate.
+4. Built-in `TriggerWorkflow` only for its supported demo workflow filenames.
 
-Use `gh run list`, `gh run view`, `gh run watch`, `github-mcp`, or a verified
-backend status endpoint to discover and track the run. Stop after the first
-credential or authorization failure on a path; do not repeat unauthenticated
-GitHub calls.
+Use GitHub REST run-list/run-view calls through `api.github.com`, `github-mcp`,
+or a verified backend status endpoint to discover and track the run. Stop only
+after the actual dispatch or run-query call returns a credential or
+authorization failure. Do not block solely because `gh auth status`,
+`git credential fill`, `credential.helper`, `http.*.extraheader`, or local
+`GH_`/`GITHUB_` environment checks are empty.
 
 ## Evidence Rules
 

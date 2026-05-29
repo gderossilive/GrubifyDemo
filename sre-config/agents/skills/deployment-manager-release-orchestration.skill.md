@@ -123,34 +123,73 @@ Before dispatch:
 
 Use this preference order for general Grubify workflow dispatch:
 
-1. `RunInTerminal` with GitHub CLI:
+1. `RunInTerminal` with direct GitHub REST calls through `curl`:
 
-   ```bash
-   gh workflow run "${WORKFLOW_FILE}" \
-     --repo "${REPO_FULL_NAME}" \
-     --ref "${WORKFLOW_REF}" \
-     -f environment_name="${environment_name}" \
-     -f resource_token="${resource_token}" \
-     -f release_version="${release_version}" \
-     -f release_profile="${release_profile}" \
-     -f deploy_mode="${deploy_mode}"
-   ```
+  ```bash
+  owner="${REPO_FULL_NAME%%/*}"
+  repo="${REPO_FULL_NAME#*/}"
+  workflow="${WORKFLOW_FILE##*/}"
+  dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-   The platform outbound proxy injects the GitHub connector OAuth/PAT token for
-   `api.github.com`. Do not require `GITHUB_PAT`, `GH_TOKEN`, or a locally
-   readable OAuth token before trying this path.
+   body="$(python3 - \
+     "${WORKFLOW_REF}" \
+     "${environment_name}" \
+     "${resource_token}" \
+     "${release_version}" \
+     "${release_profile}" \
+     "${deploy_mode}" <<'PY'
+import json
+import sys
+
+workflow_ref, environment_name, resource_token, release_version, release_profile, deploy_mode = sys.argv[1:7]
+print(json.dumps({
+  "ref": workflow_ref,
+  "inputs": {
+    "environment_name": environment_name,
+    "resource_token": resource_token,
+    "release_version": release_version,
+    "release_profile": release_profile,
+    "deploy_mode": deploy_mode
+  }
+}))
+PY
+)"
+
+  curl -sS -o dispatch-response.json -w "%{http_code}" \
+    -X POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    --data-binary "$body" \
+    "https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches"
+  ```
+
+  The platform outbound proxy injects the GitHub connector OAuth/PAT token for
+  `api.github.com`. Do not require local `gh` login, git credential helpers,
+  `GH_TOKEN`, `GITHUB_TOKEN`, `GITHUB_PAT`, or a locally readable OAuth token
+  before trying this path. `gh auth status`, `git credential fill`,
+  `credential.helper`, `http.*.extraheader`, and local `GH_`/`GITHUB_`
+  environment checks are diagnostic only and are not blockers.
+
+  HTTP 204 from the dispatch endpoint means the dispatch request was accepted.
+  HTTP 401/403 means the connector/proxy credential path failed or lacks the
+  required `workflow` permission. HTTP 404 can mean the workflow filename/ref is
+  wrong or the connector cannot see the repo.
 
 2. GitHub MCP connector, if configured and authenticated. Use its native
    workflow dispatch and run-tracking capabilities when available.
 
-3. Built-in `TriggerWorkflow` only when the target workflow filename is one of
+3. `RunInTerminal` with `gh workflow run` only if it can run without requiring a
+  local login, or if an authenticated `gh` environment already exists. Do not
+  run `gh auth status` as a hard gate.
+
+4. Built-in `TriggerWorkflow` only when the target workflow filename is one of
    the supported demo-specific filenames listed above.
 
 Record the chosen dispatch path, command or tool input, response status, and any
 returned run metadata in the evidence directory. Never print secret values.
 
-If a dispatch path returns HTTP 401, HTTP 403, missing `workflow` scope, or
-Actions read/write permission failure, stop that path and report the exact
+If the actual dispatch call returns HTTP 401, HTTP 403, missing `workflow` scope,
+or Actions read/write permission failure, stop that path and report the exact
 authorization failure. Do not retry equivalent unauthenticated GitHub API calls.
 
 ## Run Discovery and Tracking
@@ -158,8 +197,9 @@ authorization failure. Do not retry equivalent unauthenticated GitHub API calls.
 After a successful dispatch request, discover the run for `${WORKFLOW_FILE}` and
 `${WORKFLOW_REF}` using one authenticated path:
 
-- `gh run list --repo ${REPO_FULL_NAME} --workflow ${WORKFLOW_FILE} --branch
-  ${WORKFLOW_REF}` with filtering by creation time and inputs when available.
+- GitHub REST through `api.github.com`, for example
+  `GET /repos/{owner}/{repo}/actions/workflows/{workflow}/runs?branch=${WORKFLOW_REF}&event=workflow_dispatch`,
+  filtering for runs created at or after `dispatch_started_at`.
 - GitHub MCP run listing/tracking.
 - A verified backend status endpoint.
 - Built-in `TrackWorkflow` only for runs created through a supported built-in
