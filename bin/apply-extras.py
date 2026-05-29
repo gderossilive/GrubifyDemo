@@ -233,16 +233,21 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
         print("  Code repos : none")
         return
     print(f"  Code repos : {len(github_repos)} GitHub repo(s)")
-    # The OAuth-based 'github' connector shows as Disconnected in the SRE portal when
-    # PAT install is unavailable, so skip it by default. Set
-    # ENABLE_GITHUB_AUTH_CONNECTOR=true to opt back in (e.g. when OAuth sign-in is
-    # configured manually in the portal).
-    enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
+    # GitHub repo-backed agents need connector/github to exist. OAuth is the
+    # repeatable default; PAT mode is an explicit override for environments that
+    # intentionally configure GitHubSettings.PatTokenOverride-style behavior.
+    enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "true").lower() in {"1", "true", "yes"}
     github_pat = os.environ.get("GITHUB_PAT")
-    auth_type = os.environ.get("GITHUB_AUTH_CONNECTOR_TYPE", "pat" if github_pat else "oauth").strip().lower()
+    auth_type = os.environ.get("GITHUB_AUTH_CONNECTOR_TYPE", "oauth").strip().lower()
     if auth_type not in {"pat", "oauth"}:
         raise RuntimeError("GITHUB_AUTH_CONNECTOR_TYPE must be 'pat' or 'oauth'")
-    if not dry_run and enable_github_auth:
+    if dry_run:
+        if enable_github_auth:
+            connector_type = "GitHubPat" if auth_type == "pat" else "GitHubOAuth"
+            print(f"    would apply connector/github ({connector_type})")
+        else:
+            print("    would skip connector/github (ENABLE_GITHUB_AUTH_CONNECTOR is false)")
+    elif enable_github_auth:
         if auth_type == "pat":
             if not github_pat:
                 raise RuntimeError("GITHUB_AUTH_CONNECTOR_TYPE=pat requires GITHUB_PAT")
@@ -301,7 +306,23 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
                 raise RuntimeError(f"GitHub connector apply failed (HTTP {status}): {response.decode(errors='replace')[:500]}")
             print("    applied connector/github (GitHubOAuth)")
     elif not dry_run:
-        print("    skipped connector/github (set ENABLE_GITHUB_AUTH_CONNECTOR=true to enable)")
+        print("    skipped connector/github (ENABLE_GITHUB_AUTH_CONNECTOR is false)")
+    existing_repo_names_by_url: dict[str, str] = {}
+    if not dry_run:
+        status, response = http_call("GET", f"{endpoint}/api/v2/repos", token)
+        if status in {200, 201, 202, 204}:
+            try:
+                payload = json.loads(response)
+                existing_repos = payload if isinstance(payload, list) else payload.get("value", payload.get("items", []))
+            except Exception:
+                existing_repos = []
+            for existing_repo in existing_repos:
+                existing_properties = existing_repo.get("properties") or {}
+                existing_url = str(existing_properties.get("url") or "").rstrip("/")
+                existing_name = existing_repo.get("name")
+                if existing_url and existing_name:
+                    existing_repo_names_by_url[existing_url.lower()] = existing_name
+
     for repo in github_repos:
         spec = repo.get("spec") or {}
         name = repo.get("name") or Path(spec.get("url", "").rstrip("/")).name
@@ -313,6 +334,10 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
         if dry_run:
             print(f"    would apply repo/{name} ({url})")
             continue
+        existing_name = existing_repo_names_by_url.get(url.rstrip("/").lower())
+        if existing_name and existing_name != name:
+            print(f"    using existing repo/{existing_name} for {url}")
+            name = existing_name
         body = json.dumps({
             "name": name,
             "type": "CodeRepo",

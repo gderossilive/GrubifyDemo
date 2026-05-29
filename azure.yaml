@@ -32,7 +32,9 @@ hooks:
     shell: sh
     run: |
       python3 bin/assemble-agent.py
-      python3 bin/apply-extras.py
+      ENABLE_GITHUB_AUTH_CONNECTOR="${ENABLE_GITHUB_AUTH_CONNECTOR:-true}" \
+      GITHUB_AUTH_CONNECTOR_TYPE="${GITHUB_AUTH_CONNECTOR_TYPE:-oauth}" \
+        python3 bin/apply-extras.py
       echo "Grubify Food Delivery App deployed successfully!"
       echo "Frontend URL: $FRONTEND_URL"
       echo "API URL: $API_BASE_URL"

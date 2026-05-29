@@ -119,28 +119,34 @@ python3 bin/assemble-agent.py
 python3 bin/apply-extras.py
 ```
 
-## Step 5b: Install GitHub auth for deployment-manager
+## Step 5b: Configure GitHub auth for deployment-manager
 
-The `deployment-manager` subagent dispatches GitHub Actions via a `GitHubPat` connector.
-This connector is **not created by `azd up`** — it must be applied separately using the
-`gh` CLI token (or a dedicated PAT with `repo` + `workflow` scopes).
+The `deployment-manager` subagent dispatches GitHub Actions through the GitHub
+connector token. The platform uses the connector's OAuth/PAT credential
+automatically for GitHub workflow operations, so a separate PAT is not required
+by default.
+
+For `new02`, configure `connector/github` as `GitHubOAuth` and make sure the
+portal OAuth authorization includes `repo` and `workflow` scopes. If the OAuth
+app was authorized without `workflow`, re-authorize the connector rather than
+adding an unrelated local PAT.
 
 ```bash
-# Grab the active gh CLI token (already authenticated as gderossilive)
-PAT=$(gh auth token)
-azd env set GITHUB_PAT "$PAT"
-
 set -a && eval "$(azd env get-values)" && set +a
-ENABLE_GITHUB_AUTH_CONNECTOR=true python3 bin/apply-extras.py \
+ENABLE_GITHUB_AUTH_CONNECTOR=true GITHUB_AUTH_CONNECTOR_TYPE=oauth GITHUB_PAT= \
+  python3 bin/apply-extras.py \
   --skip-knowledge --skip-subagents --skip-skills
 ```
 
 Expected output:
 ```
   Code repos : 1 GitHub repo(s)
-    applied connector/github (GitHubPat)
+    applied connector/github (GitHubOAuth)
     applied repo/GrubifyDemo
 ```
+
+If the backend already registered the same URL as `repo/github`, the apply script
+will reuse that existing repo name and print `applied repo/github`.
 
 Verify:
 ```bash
@@ -151,10 +157,13 @@ curl -s "$AGENT_EP/api/v2/extendedAgent/connectors/github" \
 import sys, json
 p = json.load(sys.stdin).get('properties', {})
 print('type:', p.get('dataConnectorType'))
-tok = (p.get('extendedProperties') or {}).get('accessToken', '')
-print('token present:', bool(tok))
+print('oauth metadata has visible token:', bool((p.get('extendedProperties') or {}).get('accessToken')))
 "
 ```
+
+Expected for OAuth: `type: GitHubOAuth` and no visible token in metadata. OAuth
+tokens are backend-managed and are not expected to be readable from connector
+metadata.
 
 Also grant `SRE Agent Administrator` to both agent managed identities (otherwise
 the subagent gets 403 when reading its own connector keys at runtime):
@@ -242,12 +251,17 @@ Fix:
 3. Hard refresh SRE portal.
 
 ### D) deployment-manager gets 401/403 on GitHub dispatch
-Cause: `connector/github` is `GitHubOAuth` (no PAT) or agent identities lack SRE Agent Administrator.
+Cause: the GitHub connector OAuth/PAT token lacks workflow dispatch permission,
+the connector sign-in is disconnected, or agent identities lack SRE Agent
+Administrator.
 
 Fix:
-1. Run Step 5b to install `GitHubPat` connector.
-2. Grant `SRE Agent Administrator` to both agent managed identities (see Step 5b).
-3. If `azd deploy` was never run, images default to placeholder — run `azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT cr<token>.azurecr.io && azd deploy`.
+1. Run Step 5b to apply `connector/github` as `GitHubOAuth`.
+2. In the SRE portal, complete or repair GitHub OAuth sign-in with `repo` and
+  `workflow` scopes. For fine-grained PAT connector mode, grant Actions read
+  and write permission on the target repo.
+3. Grant `SRE Agent Administrator` to both agent managed identities (see Step 5b).
+4. If `azd deploy` was never run, images default to placeholder — run `azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT cr<token>.azurecr.io && azd deploy`.
 
 ### E) Container apps still serve default welcome page after `azd up`
 Cause: ACR empty — remote builds were skipped or registry endpoint env var was missing.

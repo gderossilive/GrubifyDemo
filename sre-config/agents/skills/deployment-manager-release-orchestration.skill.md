@@ -1,31 +1,25 @@
 # Deployment Manager Skill: Release Orchestration
 
-Use this skill as the execution contract for dispatching and validating Grubify releases.
-
-## Current GitHub Connector Mode
-
-For `grubify-new02`, `${CONNECTOR_REF}` is intentionally `GitHubOAuth`.
-`dataConnectorType=GitHubOAuth` with `extendedProperties=null` is valid OAuth
-metadata. Never classify it as `unexpected_type:GitHubOAuth`, never require
-dispatch-capable PAT proof, and never recommend restoring `GitHubPat` while this
-environment is configured for OAuth. OAuth must be validated by Connected/Ready
-status or backend connector-use dispatch/validation.
+Use this skill as the execution contract for dispatching, monitoring, and
+validating Grubify releases through GitHub Actions.
 
 ## Scope
 
 - Deployment authority is the configured GitHub Actions workflow
-   `${WORKFLOW_FILE}` in `${REPO_FULL_NAME}` on `${WORKFLOW_REF}`.
-- This subagent dispatches, monitors, validates, and hands off.
-- Do not mutate Azure infrastructure directly.
+  `${WORKFLOW_FILE}` in `${REPO_FULL_NAME}` on `${WORKFLOW_REF}`.
+- This subagent resolves release inputs, triggers the workflow, tracks the run,
+  validates baseline health, and hands off when needed.
+- Do not mutate Azure infrastructure directly. Azure access is read-only
+  evidence and validation.
 
 ## Runtime Parameters
 
-Resolve parameters in this order: operator input -> environment/config -> defaults.
+Resolve parameters in this order: operator input -> environment/config ->
+defaults.
 
 - `REPO_FULL_NAME` (default: `gderossilive/GrubifyDemo`)
 - `WORKFLOW_FILE` (default: `.github/workflows/deploy-grubify.yml`)
 - `WORKFLOW_REF` (default: `main`)
-- `CONNECTOR_REF` (default: `connector/github`)
 - `EXPECTED_REGION` (default: `swedencentral`)
 - `DEFAULT_ENVIRONMENT_NAME` (default: `e2e01`)
 - `DEFAULT_RESOURCE_TOKEN` (default: same as `environment_name`)
@@ -36,192 +30,152 @@ Resolve parameters in this order: operator input -> environment/config -> defaul
 
 ## Release Profiles
 
-Supported release profiles are environment-configurable. Recommended defaults:
+Supported release profiles are environment-configurable. Defaults:
 
-- `cart-leak-baseline`: demo Step 0 release (API_VERSION v1).
-- `safe`: reserved and not implemented unless explicitly enabled.
+- `cart-leak-baseline`: demo Step 0 release with `API_VERSION=v1`.
+- `safe`: reserved; do not use unless explicitly enabled in environment config.
 
-Do not use API_VERSION v2.
+Refuse unsupported release profiles and explain the supported values. Do not use
+`API_VERSION=v2`.
 
-## Preflight Checks
+## GitHub Connector Authentication
 
-Before dispatch:
+The GitHub connector OAuth/PAT token is the default credential for GitHub
+workflow operations. The operator does not need to provide a separate PAT.
 
-1. Validate `${WORKFLOW_FILE}` exists in `${REPO_FULL_NAME}`.
-2. Resolve SRE data-plane endpoint from agent resource `properties.agentEndpoint`
-   (do not assume `properties.configuration.endpoint`).
-   - Use Microsoft.App/agents API version `2025-05-01-preview`.
-   - Do not attempt `2024-10-02-preview`; it is unsupported for this resource
-     and causes `NoRegisteredProviderFound` in the Grubify SRE environment.
-3. For SRE data-plane API calls, use an access token with audience/resource
-   `https://azuresre.ai`.
-    - Token acquisition is a required precondition for connector reads/use.
-    - Check that the selected execution context can run `az` before attempting
-       token acquisition. `az: command not found` means the shell is
-       non-authoritative; it is not `status=no-token` and not a connector
-       blocker.
-    - If token acquisition returns `status=no-token`, do not classify
-       `${CONNECTOR_REF}` as unavailable and do not start GitHub fallback. Recover
-       token acquisition first or stop with blocked path `sre-data-plane-token`.
-    - In an authoritative shell, explicitly request the token with
-       `az account get-access-token --resource https://azuresre.ai` before calling
-       `${CONNECTOR_REF}` data-plane APIs.
-4. Confirm auth prerequisites are present (OIDC or required GitHub secrets).
-5. Confirm target environment_name and resource_token.
-6. Confirm target region matches `${EXPECTED_REGION}`.
-7. If `${CONNECTOR_REF}` is configured for PAT-backed auth, ensure PAT source exists via one of:
-   - GITHUB_PAT
-   - GITHUB_PAT_SECRET_URI
-   - GITHUB_PAT_KEYVAULT_NAME + GITHUB_PAT_SECRET_NAME
-8. For Key Vault PAT read, executing identity must have Key Vault Secrets User.
+Platform GitHub workflow tools authenticate through `GitHubClientFactory`, which
+asks `IOAuthTokenService.GetValidGitHubTokenAsync()` for the current GitHub
+token. That token is the same credential obtained when the GitHub repository is
+connected through the connector. The platform refreshes OAuth tokens at request
+time through the connector credential store.
 
-## Credential and Access Gates
+Credential precedence:
 
-- If GitHub workflow APIs return HTTP 401 (Bad credentials), stop dispatch attempts on
-   that auth path immediately and report a blocked credential path.
-- Do not retry the same unauthenticated dispatch/query pattern after the first 401.
-- If connector read/use path for `${CONNECTOR_REF}` returns HTTP 403, classify the
-   connector fallback as blocked for this session and stop connector-based retries.
-- `status=no-token` while preparing to read/use `${CONNECTOR_REF}` is not a
-   connector read/use status. Treat it as blocked path `sre-data-plane-token`,
-   restore token acquisition, and retry the connector read/use path before any
-   GitHub fallback.
-- If no supported local credential source exists (for example, `gh auth token`
-   unavailable and `GH_TOKEN`/`GITHUB_TOKEN`/`GITHUB_PAT` unset), report
-   authenticated dispatch as unavailable in-shell and stop.
-- In SRE Agent runtime, do not assume local shell environment variables (for
-   example `.env`) are available. Prefer server-side connector execution.
-- Use only an authoritative execution context for Azure data-plane and ARM
-   evidence. If a shell cannot run `az` or returns `az: command not found`,
-   classify that shell as blocked path `non-authoritative-shell`, not
-   `sre-data-plane-token`; switch to a working Azure CLI/backend connector path.
-   Do not attempt GitHub fallback from a non-authoritative shell.
+1. `GitHubSettings.PatTokenOverride`, if configured, takes precedence.
+2. Otherwise use the connector OAuth/PAT credential.
 
-## Connector and Repo Semantics
+Required workflow-dispatch permissions:
 
-- Treat Notification connectors and Code Repository entries as separate surfaces.
-- `${CONNECTOR_REF}` readiness is a connector check; GitHub repository presence is
-   a code-repo check.
-- `${CONNECTOR_REF}` may be `GitHubPat` or `GitHubOAuth`.
-   - For `GitHubPat`, connector metadata may include backend-resolved token
-      material, but do not read or print it.
-   - For `GitHubOAuth`, do not expect an access token in connector metadata;
-      require Connected/Ready status or a successful backend connector-use
-      operation instead.
-   - `GitHubOAuth` with `extendedProperties=null` is an expected metadata shape,
-      not `unexpected_type`, not `unexpected_type:GitHubOAuth`, and not proof that
-      connector dispatch is blocked.
-   - Do not require a "backend-readable" GitHub token for OAuth. OAuth is a
-      backend-managed connection; validate it by connector status or backend
-      connector-use behavior, not by readable secret material.
-   - Do not require "dispatch-capable PAT proof" when `dataConnectorType` is
-      `GitHubOAuth`. A PAT is not part of the OAuth connector contract.
-   - HTTP 200 connector metadata with `dataConnectorType=GitHubOAuth` means the
-      server-side connector path is still available for OAuth validation/use; it
-      is not a blocked connector path by itself.
-- UI may show both Teams and GitHub as "connected", while connector collection
-   APIs may return only Teams and GitHub appears under repos.
-- Do not infer connector availability from connector count alone.
+- OAuth connector: OAuth authorization must include `workflow` and `repo`.
+- Classic PAT connector: PAT must include `workflow`.
+- Fine-grained PAT connector: Actions read and write permission is required for
+  `${REPO_FULL_NAME}`.
+
+If dispatch fails because the token lacks workflow permission, report that the
+GitHub connector must be re-authorized or repaired. Do not ask for a separate
+PAT unless the operator intentionally wants to configure `PatTokenOverride`.
+
+## Built-In Workflow Tool Caveat
+
+The built-in `TriggerWorkflow` tool is not a general GitHub Actions trigger in
+the current platform. It is hardcoded to these demo workflow filenames:
+
+- `main_oa-demo-web-stage.yml`
+- `main_oa-demo-web-canary.yml`
+- `main_oa-demo-web-prod-westus.yml`
+
+Although `TriggerWorkflow`, `TrackWorkflow`, and
+`CheckPullRequestMergeStatus` use the connector token automatically, do not use
+`TriggerWorkflow` for `${WORKFLOW_FILE}` unless it matches one of those
+supported demo filenames or the platform explicitly adds general support.
 
 ## Workflow Inputs
 
 Required inputs:
 
-- environment_name
-- resource_token
-- release_version
-- release_profile
-- deploy_mode
-
-Default resolution order: operator-provided values first, then defaults.
+- `environment_name`
+- `resource_token`
+- `release_version`
+- `release_profile`
+- `deploy_mode`
 
 Defaults:
 
-- environment_name = `${DEFAULT_ENVIRONMENT_NAME}`
-- resource_token = `${DEFAULT_RESOURCE_TOKEN}` (or derive from environment_name)
-- release_profile = `${DEFAULT_RELEASE_PROFILE}`
-- deploy_mode = `${DEFAULT_DEPLOY_MODE}`
-- release_version = `YYYYMMDD-<7-char SHA of ${WORKFLOW_REF}>`
+- `environment_name = ${DEFAULT_ENVIRONMENT_NAME}`
+- `resource_token = ${DEFAULT_RESOURCE_TOKEN}` or derive from
+  `environment_name`
+- `release_profile = ${DEFAULT_RELEASE_PROFILE}`
+- `deploy_mode = ${DEFAULT_DEPLOY_MODE}`
+- `release_version = YYYYMMDD-<7-char SHA of ${WORKFLOW_REF}>`
 
-Always echo resolved input set and wait for explicit confirmation unless operator explicitly asked for without confirmation/no confirm.
+Always echo the resolved input set and wait for explicit confirmation unless the
+operator explicitly asked for `without confirmation` or `no confirm`.
 
-## Deploy Intent Recognition
+## Preflight Checks
 
-Treat these as deploy intents: deploy, release, ship, roll out, push, promote, cut a release.
+Before dispatch:
+
+1. Validate `${WORKFLOW_FILE}` exists in `${REPO_FULL_NAME}` at
+   `${WORKFLOW_REF}`.
+2. Validate the target region is `${EXPECTED_REGION}`.
+3. Confirm target `environment_name`, `resource_token`, `release_profile`, and
+   `deploy_mode`.
+4. Confirm the workflow input contract accepts the five required inputs.
+5. Confirm GitHub connector authorization is expected to include workflow
+   dispatch permission. If evidence shows missing scope/permission, block with a
+   connector authorization action.
+6. If collecting SRE Agent endpoint evidence, use Microsoft.App/agents API
+   version `2025-05-01-preview` and `properties.agentEndpoint`.
+7. Create one evidence directory for the attempt:
+   `/tmp/deploy-${resource_token}-${YYYYMMDDHHMMSS}`.
 
 ## Dispatch Procedure
 
-1. Resolve all five inputs.
-2. Echo resolved set and obtain confirmation unless explicitly skipped.
-3. Create one durable evidence directory for this deployment attempt, named with
-   the environment/resource token and timestamp (for example
-   `/tmp/deploy-${resource_token}-${YYYYMMDDHHMMSS}`). Store connector status,
-   workflow contract, dispatch response, run polling, and baseline check outputs
-   there. Do not rely on scattered temporary files whose absence forces reruns.
-4. Dispatch workflow with mandatory path preference:
-    - Primary: server-side connector use with `${CONNECTOR_REF}`
-       (GitHubPat or OAuth), where secrets are resolved only by backend runtime.
-   - Secondary: github-mcp workflow dispatch only when server-side connector
-     dispatch is blocked by a concrete connector read/use status and cannot
-     start. Token acquisition failures are not connector status.
-5. For server-side connector dispatch:
-    - First prove the execution context is authoritative for Azure operations:
-       `az` must be available or an equivalent backend token/connector execution
-       path must be available.
-    - If the selected shell returns `az: command not found`, stop that shell path
-       as `non-authoritative-shell`, switch to a working Azure CLI/backend path,
-       and do not attempt GitHub fallback.
-    - Acquire a valid SRE data-plane token for `https://azuresre.ai` before
-       connector metadata/readiness checks.
-    - If token acquisition fails with `status=no-token`, stop connector
-       dispatch setup and report blocked path `sre-data-plane-token`; do not use
-       GitHub fallback in the same attempt.
-    - Invoke backend connector-use path (for example, dispatch API with
-       `connectorRef=${CONNECTOR_REF}`).
-   - Do not read connector secret material from data-plane APIs.
-    - If connector metadata returns HTTP 200 with `dataConnectorType=GitHubOAuth`
-       and `extendedProperties=null`, continue to OAuth status/connector-use
-       validation. Do not classify this as `unexpected_type` and do not move to
-       GitHub REST/CLI fallback.
-    - Do not stop at metadata because OAuth lacks PAT proof. The next required
-       step is backend OAuth connector-use dispatch/validation.
-    - Require backend evidence that `${CONNECTOR_REF}` is Connected/Ready, or
-       for OAuth a successful backend connector-use validation that proves the
-       signed-in OAuth connection is usable.
-    - Block OAuth only on a concrete OAuth connector status/use failure, such as
-       Disconnected/Unauthorized/Forbidden status or backend connector-use HTTP
-       401/403/404/validation failure. Report that exact status as the first
-       failing connector status.
-    - Separately require repo evidence that `${REPO_FULL_NAME}` is present/Ready in
-       the code-repo surface.
-    - Dispatch GitHub `workflow_dispatch` for `${WORKFLOW_FILE}` on
-       `${WORKFLOW_REF}` via backend connector-use operation.
-   - Poll workflow run via GitHub REST or backend status endpoint until terminal.
-6. Once connector-backed dispatch returns HTTP 204 or an equivalent accepted
-   dispatch response, do not switch to unauthenticated GitHub CLI/REST follow-up
-   paths. Continue run discovery and polling only through connector-derived auth,
-   github-mcp with valid auth, or a verified backend status endpoint.
-7. For secondary fallback (github-mcp), use it only after recording the first
-   concrete connector read/use blocking condition for connector dispatch (for
-   example connector read/use HTTP 401/403/404 or connector validation failure)
-   and include that blocker in reporting. Do not use fallback after
-   `status=no-token` or `az: command not found`; those mean the SRE data-plane
-   token/context path must be restored first.
-8. If legacy environment app RG lookup fails for rg-grubify-app-${resource_token}, resolve actual RG from ACR cr${resource_token}.
+Use this preference order for general Grubify workflow dispatch:
+
+1. `RunInTerminal` with GitHub CLI:
+
+   ```bash
+   gh workflow run "${WORKFLOW_FILE}" \
+     --repo "${REPO_FULL_NAME}" \
+     --ref "${WORKFLOW_REF}" \
+     -f environment_name="${environment_name}" \
+     -f resource_token="${resource_token}" \
+     -f release_version="${release_version}" \
+     -f release_profile="${release_profile}" \
+     -f deploy_mode="${deploy_mode}"
+   ```
+
+   The platform outbound proxy injects the GitHub connector OAuth/PAT token for
+   `api.github.com`. Do not require `GITHUB_PAT`, `GH_TOKEN`, or a locally
+   readable OAuth token before trying this path.
+
+2. GitHub MCP connector, if configured and authenticated. Use its native
+   workflow dispatch and run-tracking capabilities when available.
+
+3. Built-in `TriggerWorkflow` only when the target workflow filename is one of
+   the supported demo-specific filenames listed above.
+
+Record the chosen dispatch path, command or tool input, response status, and any
+returned run metadata in the evidence directory. Never print secret values.
+
+If a dispatch path returns HTTP 401, HTTP 403, missing `workflow` scope, or
+Actions read/write permission failure, stop that path and report the exact
+authorization failure. Do not retry equivalent unauthenticated GitHub API calls.
+
+## Run Discovery and Tracking
+
+After a successful dispatch request, discover the run for `${WORKFLOW_FILE}` and
+`${WORKFLOW_REF}` using one authenticated path:
+
+- `gh run list --repo ${REPO_FULL_NAME} --workflow ${WORKFLOW_FILE} --branch
+  ${WORKFLOW_REF}` with filtering by creation time and inputs when available.
+- GitHub MCP run listing/tracking.
+- A verified backend status endpoint.
+- Built-in `TrackWorkflow` only for runs created through a supported built-in
+  workflow path.
+
+Poll until terminal conclusion in: `success`, `failure`, `cancelled`, or
+`timed_out`. Include `run_url` in progress updates and final reporting.
 
 ## Hard Evidence Rule
 
-A deployment is valid only with run_id and run_url obtained in the current conversation.
-Do not substitute Azure revision/image observations for dispatch evidence.
-Do not use gh auth status as a gate in this sandbox.
-Do not treat connector secret reads as valid evidence; only run_id/run_url and workflow status evidence count.
-If a run is visible but the requested `workflow_dispatch` inputs cannot be proven,
-report: "healthy environment observed, requested release inputs unproven".
+A deployment is valid only with `run_id` and `run_url` obtained during the
+current conversation. Do not substitute Azure revision, ACR image, or telemetry
+observations for dispatch evidence.
 
-## Monitoring and Terminal States
-
-Poll until terminal conclusion in: success, failure, cancelled, timed_out.
-Always include run_url in progress updates.
+If a run is visible but the requested workflow inputs cannot be proven, report:
+`healthy environment observed, requested release inputs unproven`.
 
 ## Post-Success Baseline Validation
 
@@ -229,22 +183,24 @@ After terminal success:
 
 1. Frontend URL returns HTTP 200.
 2. API responds for:
-   - GET /api/restaurants
-   - GET /api/fooditems
-   - GET /api/cart/{userId} (`${DEFAULT_USER_ID}` default)
-3. POST /api/cart/${DEFAULT_USER_ID}/items returns 2xx with valid cart body.
-4. POST /api/orders returns 201.
-5. Confirm new revision is active and receiving traffic via Log Analytics or App Insights.
+   - `GET /api/restaurants`
+   - `GET /api/fooditems`
+   - `GET /api/cart/{userId}` using `${DEFAULT_USER_ID}` unless overridden
+3. `POST /api/cart/${DEFAULT_USER_ID}/items` returns 2xx with a valid cart body.
+4. `POST /api/orders` returns 201.
+5. Confirm the new revision is active and receiving traffic through Log
+   Analytics or App Insights when telemetry is available.
 
-If telemetry backends are unavailable/not provisioned, classify telemetry as
-"evidence unavailable" and report the reason explicitly; do not mark deployment
-failed when all functional baseline checks pass.
+If telemetry backends are unavailable, classify telemetry as `evidence
+unavailable` and report why. Do not fail deployment when all functional baseline
+checks pass.
 
-If any baseline check fails: classify as deployment validation failure, recommend rollback, and do not hand off to tests-manager.
+If any functional baseline check fails, classify it as deployment validation
+failure, recommend rollback, and do not hand off to tests-manager.
 
-## Failure-Path Handoff (Mandatory)
+## Failure-Path Handoff
 
-For terminal non-success (failure/cancelled/timed_out), hand off to incident-handler-core.
+For terminal non-success states, hand off to incident-handler-core.
 
 Handoff context shape:
 
@@ -255,7 +211,7 @@ Handoff context shape:
   "run_id": "<run_id>",
   "conclusion": "failure|cancelled|timed_out",
   "last_failed_step": "<job>/<step name>",
-  "failure_logs_tail": "<last ~50 lines of the failed step's log>",
+  "failure_logs_tail": "<last ~50 lines of the failed step log>",
   "release_inputs": {
     "environment_name": "...",
     "resource_token": "...",
@@ -266,83 +222,56 @@ Handoff context shape:
 }
 ```
 
-Retrieve last_failed_step and failure_logs_tail using github-mcp or GitHub REST fallback.
-After handoff, report run_url and handoff confirmation to operator.
+Retrieve `last_failed_step` and `failure_logs_tail` through authenticated GitHub
+MCP, `gh run view`, or another authenticated backend status path.
 
 ## Handoff to tests-manager
 
-Only when baseline checks pass and operator requested test/load-trigger phase.
-Provide frontend URL, API URL, release profile, release version, revision name, and ACR image tag.
+Only hand off to tests-manager when baseline checks pass and the operator
+requested the post-deploy test or load-trigger phase. Provide frontend URL, API
+URL, release profile, release version, revision name, and ACR image tag when
+available.
 
 ## Rollback
 
-If release fails baseline validation or regression is reported:
+If release fails baseline validation or a regression is reported:
 
-1. Re-dispatch `${WORKFLOW_FILE}` with previous known-good release_version.
-2. Keep same release_profile.
-3. Use deploy_mode=deploy when infrastructure is unchanged.
+1. Re-dispatch `${WORKFLOW_FILE}` with the previous known-good
+   `release_version`.
+2. Keep the same `release_profile` unless the operator chooses another
+   supported profile.
+3. Use `deploy_mode=deploy` when infrastructure is unchanged.
 4. Re-run baseline validation.
 
 ## Reporting Contract
 
-Produce structured summary with:
+Produce a structured release summary with:
 
 - resolved release inputs
-- run_url, conclusion, duration
+- dispatch path used
+- run_id, run_url, conclusion, duration
 - baseline checks pass/fail per item
-- next step (tests-manager handoff, rollback, or human review)
-- references: revision name, ACR image tag, App Insights resource ID, Log Analytics workspace ID
+- next step: tests-manager handoff, rollback, connector authorization repair, or
+  human review
+- references: revision name, ACR image tag, App Insights resource ID, Log
+  Analytics workspace ID when available
 
-When blocked or evidence is incomplete, include a short failure reason section with:
+When blocked or evidence is incomplete, include:
 
-- blocked path(s): `github-cli`, `github-rest`, `connector-ref`,
-   `sre-data-plane-token`, `non-authoritative-shell`, or `local-shell-auth`
-- first failing HTTP status/code per blocked path
-- explicit next action required (for example, provide valid GitHub auth token,
-   restore connector permission, or re-run with backend connector execution)
-- evidence statement if needed: "healthy environment observed, requested release
-   inputs unproven"
+- blocked path: `github-cli`, `github-mcp`, `built-in-triggerworkflow`,
+  `connector-authorization`, `non-authoritative-shell`, or `azure-evidence`
+- first failing status/code/message
+- next operator action required
+- evidence statement when applicable: `healthy environment observed, requested
+  release inputs unproven`
 
-For OAuth connectors, do not report `unexpected_type:GitHubOAuth`, do not ask for
-`GitHubPat` restoration, and do not ask for dispatch-capable PAT proof. If OAuth
-cannot dispatch, report the concrete OAuth connector-use/status failure and the
-next action: complete or repair SRE portal OAuth sign-in/permissions for
-`${REPO_FULL_NAME}`.
+Never report `unexpected_type:GitHubOAuth`, never ask to restore `GitHubPat`, and
+never ask for dispatch-capable PAT proof when the GitHub connector is OAuth.
+Report OAuth failures as connector authorization or scope/permission issues with
+the actual failing status.
 
 ## Optional Documentation PR Gate
 
-If a post-deploy documentation update or PR is requested, verify both before
-creating commits, pushing branches, or opening a PR:
-
-- `gh auth status` succeeds against `${REPO_FULL_NAME}` with a token accepted by
-   the GitHub API.
-- `git push --dry-run` or an equivalent non-mutating remote auth check succeeds
-   for the target remote/branch.
-
-If either check fails, report documentation PR creation as blocked and leave any
-local documentation changes unpushed. Do not let PR creation failure change the
-deployment result.
-
-## Guardrails
-
-- Never call write-capable Azure mutation paths.
-- Never bypass validation or force unsupported profile behavior.
-- Never claim success without run_id and run_url evidence.
-- Never call connector read APIs to extract PAT/secret values.
-- Use connector metadata/status reads only (Connected/Ready), and use server-side connector execution for dispatch.
-- Never classify `dataConnectorType=GitHubOAuth` as unexpected. OAuth is valid
-   for `${CONNECTOR_REF}` even when `extendedProperties=null`.
-- Never require dispatch-capable PAT proof for `GitHubOAuth`; proceed to OAuth
-   connector-use validation instead.
-- Always pin Microsoft.App/agents reads to `2025-05-01-preview`.
-- Treat `status=no-token` as `sre-data-plane-token` blocked, not as connector
-   unavailability.
-- Treat `az: command not found` as `non-authoritative-shell`, not
-   `sre-data-plane-token`.
-- Never use GitHub fallback until `${CONNECTOR_REF}` has a concrete connector
-   read/use failure status.
-- Keep deployment evidence in one durable per-attempt directory.
-- Ignore Azure evidence from shells where `az` is unavailable.
-- After connector-backed dispatch is accepted, avoid unauthenticated GitHub
-   follow-up paths.
-- Gate optional PR creation on verified `gh` and `git push` auth.
+If a post-deploy documentation update or PR is requested, verify authenticated
+GitHub access before creating commits, pushing branches, or opening a PR. Keep
+PR work separate from the deployment result.

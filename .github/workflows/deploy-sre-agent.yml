@@ -67,6 +67,8 @@ env:
   INCIDENT_HANDLER_AGENT: ${{ inputs.incident_handler_agent }}
   ENABLE_SERVICENOW_HANDLER: ${{ inputs.enable_servicenow }}
   ENABLE_TEAMS_CONNECTOR: ${{ inputs.enable_teams }}
+  ENABLE_GITHUB_AUTH_CONNECTOR: true
+  GITHUB_AUTH_CONNECTOR_TYPE: oauth
   GITHUB_REPO: ${{ github.repository }}
 
 jobs:

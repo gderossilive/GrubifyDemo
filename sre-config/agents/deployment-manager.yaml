@@ -1,7 +1,7 @@
 # Deployment Manager Subagent
-# Orchestrates Grubify releases by dispatching the GitHub Actions deployment
-# workflow and monitoring the run. Does not perform Azure mutations directly —
-# deployment authority lives in CI.
+# Orchestrates Grubify releases through GitHub Actions. GitHub credentials come
+# from the configured GitHub connector OAuth/PAT token; no separate PAT is
+# required unless the connector token lacks workflow dispatch permission.
 api_version: azuresre.ai/v1
 kind: AgentConfiguration
 spec:
@@ -9,7 +9,7 @@ spec:
   system_prompt_file: instructions/deployment-manager.instructions.md
   skill_files:
     - skills/deployment-manager-release-orchestration.skill.md
-  handoff_description: Orchestrates Grubify releases by dispatching GitHub Actions and validating baseline health, then hands off to tests-manager
+  handoff_description: Orchestrates Grubify GitHub Actions releases using connector-backed authentication, validates baseline health, then hands off to tests-manager when requested
   agent_type: Autonomous
   tools:
     - SearchMemory
@@ -18,5 +18,6 @@ spec:
     - QueryLogAnalyticsByWorkspaceId
     - QueryAppInsightsByResourceId
     - ExecutePythonCode
+    - RunInTerminal
   mcp_tools:
     - github-mcp/*

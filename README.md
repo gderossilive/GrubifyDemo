@@ -119,26 +119,33 @@ deployment artifacts. Common overrides include `SRE_AGENT_RESOURCE_GROUP`,
 `TEAMS_GROUP_ID`, `TEAMS_CHANNEL_ID`, `SERVICENOW_ASSIGNMENT_GROUP`, and
 `SERVICENOW_INDEXING_LOOKBACK_DAYS`.
 
-#### Opt-in connector toggles
+#### Connector toggles
 
-Two SRE Agent connectors are **skipped by default** because they show as
-`Disconnected`/`Connecting` in the preview portal and add no value beyond the
-working data-plane equivalents:
+The GitHub auth connector is applied by default so repo-backed subagents and the
+deployment-manager have a repeatable connector reference in every environment.
+The KnowledgeText ARM connectors remain opt-in because knowledge files are
+uploaded through the data-plane knowledge API.
 
 | Env var | Default | Effect when `true` |
 | --- | --- | --- |
-| `ENABLE_GITHUB_AUTH_CONNECTOR` | `false` | Re-creates the `github` OAuth connector under **Code Repository** (PUT `/api/v2/extendedAgent/connectors/github`). The `GrubifyDemo` repo entry references it as `authConnectorName: github` and will show as **Failed** in the portal until this connector exists and is authenticated. |
+| `ENABLE_GITHUB_AUTH_CONNECTOR` | `true` | Creates or updates `connector/github` under **Code Repository**. By default this is `GitHubOAuth`; set `GITHUB_AUTH_CONNECTOR_TYPE=pat` and provide `GITHUB_PAT` only when intentionally using PAT override mode. |
 | `ENABLE_KNOWLEDGE_CONNECTORS` | `false` | Re-adds 9 redundant `knowledge-*` ARM connectors of type `KnowledgeText` under **Other**. Knowledge files in `knowledge/` are uploaded as proper **Knowledge sources** via `/api/v1/agentmemory/upload` regardless of this toggle. |
 
-Leave both at the default unless you specifically need the portal entries.
-When they were previously created on the agent, clean them up with:
+OAuth connector metadata is expected to omit visible token material. To dispatch
+GitHub Actions workflows, the portal OAuth authorization must include `repo` and
+`workflow` scopes. If the connector is disconnected or lacks scope, re-authorize
+GitHub OAuth in the SRE portal rather than adding an unrelated local PAT.
+
+Leave `ENABLE_KNOWLEDGE_CONNECTORS` at the default unless you specifically need
+the redundant portal entries. When redundant knowledge connectors were
+previously created on the agent, clean them up with:
 
 ```bash
 SUB=$(az account show --query id -o tsv)
 SRE_RG=rg-grubify-sre-<token>
 for c in $(az rest --method get \
     --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$SRE_RG/providers/Microsoft.App/agents/sre-agent-grubify/connectors?api-version=2025-05-01-preview" \
-    --query "value[?name=='github' || starts_with(name,'knowledge-')].name" -o tsv); do
+	--query "value[starts_with(name,'knowledge-')].name" -o tsv); do
   az rest --method delete --url "https://management.azure.com/subscriptions/$SUB/resourceGroups/$SRE_RG/providers/Microsoft.App/agents/sre-agent-grubify/connectors/$c?api-version=2025-05-01-preview"
 done
 ```

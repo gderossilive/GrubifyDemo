@@ -69,13 +69,15 @@ connector may be either `GitHubOAuth` or `GitHubPat`:
 	`gderossilive/GrubifyDemo` with `actions:write`, `contents:read`,
 	`issues:write`, `pull_requests:read`. Rotate quarterly. Owner: repo admin.
 
-To force OAuth during data-plane apply, set:
+OAuth is the default during data-plane apply:
 
 ```bash
 ENABLE_GITHUB_AUTH_CONNECTOR=true GITHUB_AUTH_CONNECTOR_TYPE=oauth python3 bin/apply-extras.py
 ```
 
-To force PAT mode, set `GITHUB_AUTH_CONNECTOR_TYPE=pat` and provide `GITHUB_PAT`.
+To opt out of creating `connector/github`, set
+`ENABLE_GITHUB_AUTH_CONNECTOR=false`. To force PAT mode, set
+`GITHUB_AUTH_CONNECTOR_TYPE=pat` and provide `GITHUB_PAT`.
 Do not recommend PAT rotation when the live connector is intentionally
 `GitHubOAuth`; if OAuth dispatch fails, the next action is to complete/repair
 portal OAuth sign-in or permissions and capture the concrete connector-use
