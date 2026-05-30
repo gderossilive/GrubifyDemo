@@ -37,6 +37,15 @@ different scenario.
 The GitHub connector token is used automatically for platform GitHub workflow
 operations. Do not ask the operator for a separate PAT by default.
 
+The configured Key Vault fallback for arbitrary workflow dispatch is:
+
+- Key Vault: `SRE_GITHUB_PAT_KEY_VAULT_NAME_PLACEHOLDER`
+- Secret name: `SRE_GITHUB_PAT_SECRET_NAME_PLACEHOLDER`
+
+Use this secret only inside `RunInTerminal` to set `GH_TOKEN` for `gh workflow
+run`. Never print the secret value, persist it to the evidence directory, or
+include it in final output.
+
 How authentication works:
 
 1. OAuth or connector PAT is the default credential path. When a GitHub
@@ -62,10 +71,11 @@ and ask for connector re-authorization or permission repair.
 If a raw terminal GitHub REST dispatch returns `401 Bad credentials` or
 `Requires authentication`, the terminal request was not authenticated. Do not
 retry raw `curl` without an `Authorization` header. Report the first failing
-status and move to `github-mcp` or `gh workflow run`. If neither an MCP dispatch
-tool nor `gh` is available, report blocked path `github-mcp` or `github-cli`
-with next action: repair MCP/connector auth, add a GitHub workflow dispatch
-tool, or provide an explicit workflow-capable terminal token.
+status and move to `github-mcp` or an authenticated terminal path. If neither an
+MCP dispatch tool nor authenticated `gh`/REST is available, report blocked path
+`github-mcp` or `github-cli` with next action: expose a GitHub MCP workflow
+dispatch tool, authenticate `gh` in the SRE Agent terminal, or provide an
+explicit workflow-capable terminal token.
 
 ## Dispatch Tool Policy
 
@@ -86,12 +96,15 @@ For general-purpose Grubify workflow dispatch, use this preference order:
 1. `github-mcp/*`, if available and authenticated, when it exposes workflow
   dispatch and run tracking. This is the preferred no-secret path because the
   MCP connector owns GitHub authentication.
-2. `RunInTerminal` with `gh workflow run` when `gh` is installed. The SRE Agent
-  sandbox for `new02` has been observed with `/usr/bin/gh` version 2.92.0. Do
-  not run `gh auth status` as a hard gate before trying this path; execute the
-  dispatch and classify any resulting auth/scope error from `gh` as connector
-  authorization evidence. The platform GitHub credential path may authenticate
-  `gh` API calls through the connected repository/OAuth/PAT path.
+2. `RunInTerminal` with `gh workflow run` using `GH_TOKEN` loaded from Key Vault
+  secret `SRE_GITHUB_PAT_SECRET_NAME_PLACEHOLDER` in vault
+  `SRE_GITHUB_PAT_KEY_VAULT_NAME_PLACEHOLDER`. The SRE Agent sandbox for `new02`
+  has been observed with `/usr/bin/gh` version 2.92.0, but a live dispatch test
+  returned unauthenticated/login-required when no token was exported. Therefore
+  `gh` availability is not sufficient evidence. If Key Vault retrieval fails or
+  the secret is empty, do not run the deploy command; report
+  `github-cli unauthenticated` with next action to populate the Key Vault secret
+  and verify SRE Agent identity has `Key Vault Secrets User` on the vault.
 3. `RunInTerminal` with direct GitHub REST calls to `api.github.com` only when an
   explicit workflow-capable token is available in that terminal context
   (`GH_TOKEN`, `GITHUB_TOKEN`, or `GITHUB_PAT`). Include

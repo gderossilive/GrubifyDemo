@@ -41,6 +41,12 @@ param sreLogAnalyticsWorkspaceName string = 'law-sre-grubify'
 @description('SRE Agent Application Insights component name.')
 param sreApplicationInsightsName string = 'appi-sre-grubify'
 
+@description('Name of the Key Vault in the SRE Agent resource group that stores the GitHub PAT secret used for workflow dispatch fallback.')
+param sreGithubPatKeyVaultName string = 'kv-sre-grubify-${resourceToken}'
+
+@description('Name of the Key Vault secret containing the GitHub PAT used by deployment-manager fallback workflow dispatch.')
+param sreGithubPatSecretName string = 'GH-PAT'
+
 @allowed([
   'Low'
   'Medium'
@@ -304,6 +310,20 @@ module sreIdentitySreMonitoringReader 'core/host/role-assignment.bicep' = {
   }
 }
 
+module sreGithubPatKeyVault 'core/host/key-vault.bicep' = {
+  name: 'sre-github-pat-key-vault'
+  scope: sreRg
+  params: {
+    location: location
+    name: sreGithubPatKeyVaultName
+    secretsUserPrincipalIds: [
+      sreAgent.outputs.identityPrincipalId
+      sreAgent.outputs.agentPrincipalId
+    ]
+    tags: tags
+  }
+}
+
 // ARM-supported SRE Agent connector child resources
 module sreAgentExtensions 'core/host/sre-agent-extensions.bicep' = if (!empty(sreConnectors)) {
   name: 'sre-agent-extensions'
@@ -337,6 +357,9 @@ output SRE_AGENT_PRINCIPAL_ID string = sreAgent.outputs.agentPrincipalId
 output SRE_AGENT_IDENTITY_ID string = sreAgent.outputs.identityId
 output SRE_AGENT_IDENTITY_NAME string = sreAgent.outputs.identityName
 output SRE_AGENT_IDENTITY_PRINCIPAL_ID string = sreAgent.outputs.identityPrincipalId
+output SRE_GITHUB_PAT_KEY_VAULT_NAME string = sreGithubPatKeyVault.outputs.name
+output SRE_GITHUB_PAT_KEY_VAULT_URI string = sreGithubPatKeyVault.outputs.vaultUri
+output SRE_GITHUB_PAT_SECRET_NAME string = sreGithubPatSecretName
 output SRE_AGENT_SUBNET_RESOURCE_ID string = sreAgentSubnetResourceId
 output SRE_AGENT_NAT_PUBLIC_IP string = !useSreAgentVnetIntegration || useExistingSreAgentSubnet ? '' : sreAgentVnet!.outputs.natPublicIpAddress
 output SRE_LOG_ANALYTICS_WORKSPACE_ID string = sreObservability.outputs.logAnalyticsWorkspaceId

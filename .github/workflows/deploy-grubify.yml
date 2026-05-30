@@ -16,13 +16,15 @@ on:
   workflow_dispatch:
     inputs:
       environment_name:
-        description: "azd environment name (e.g. grubify-demo)"
+        description: "azd environment name"
         required: true
         type: string
+        default: new02
       resource_token:
-        description: "Short token used in resource names (e.g. demo01)"
+        description: "Short token used in resource names"
         required: true
         type: string
+        default: new02
       release_version:
         description: "Semantic release version (e.g. 0.2.0-step0)"
         required: true

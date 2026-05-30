@@ -172,27 +172,53 @@ python3 bin/apply-extras.py
 
 ## Step 5b: Configure GitHub auth for deployment-manager
 
-The `deployment-manager` subagent dispatches GitHub Actions through the GitHub
-connector token. The platform uses the connector's OAuth/PAT credential
-automatically for GitHub workflow operations, so a separate PAT is not required
-by default.
+The `deployment-manager` subagent is configured with `github-mcp/*`,
+`connectors: [github]`, and a `RunInTerminal` fallback that uses
+`gh workflow run`. The platform uses the connected GitHub repository OAuth/PAT
+credential automatically for supported GitHub operations. For arbitrary workflow
+dispatch such as `deploy-grubify.yml`, this repo also provisions a Key Vault in
+the SRE Agent resource group and stores the terminal fallback PAT as secret
+`GH-PAT`.
 
-For `new02`, configure `connector/github` as `GitHubOAuth` and make sure the
-portal OAuth authorization includes `repo` and `workflow` scopes. If the OAuth
-app was authorized without `workflow`, re-authorize the connector rather than
-adding an unrelated local PAT.
+For `new02`, do not create a data-plane `GitHubOAuth` connector with
+`bin/apply-extras.py`; the current backend reports that connector type as
+deprecated/disconnected. Instead, authorize the repository in the SRE portal /
+GitHub MCP flow and make sure authorization includes `repo` and `workflow`
+scopes. If the OAuth app was authorized without `workflow`, re-authorize the
+connector rather than adding an unrelated local PAT.
+
+After `azd up` creates the Key Vault, store a workflow-capable PAT without
+printing it:
 
 ```bash
 set -a && eval "$(azd env get-values)" && set +a
-ENABLE_GITHUB_AUTH_CONNECTOR=true GITHUB_AUTH_CONNECTOR_TYPE=oauth GITHUB_PAT= \
+read -rsp "GitHub PAT: " GITHUB_PAT && echo
+az keyvault secret set \
+  --vault-name "kv-sre-grubify-${GRUBIFY_RESOURCE_TOKEN}" \
+  --name "${SRE_GITHUB_PAT_SECRET_NAME:-GH-PAT}" \
+  --value "$GITHUB_PAT" \
+  --output none
+unset GITHUB_PAT
+```
+
+The Bicep deployment grants both SRE Agent identities `Key Vault Secrets User`
+on this vault. The deployment-manager fallback retrieves `GH-PAT`, exports it as
+`GH_TOKEN` for `gh workflow run`, and unsets it after the command.
+
+For fully repeatable non-portal connector automation only, opt into PAT
+connector mode:
+
+```bash
+set -a && eval "$(azd env get-values)" && set +a
+ENABLE_GITHUB_AUTH_CONNECTOR=true GITHUB_AUTH_CONNECTOR_TYPE=pat GITHUB_PAT=<token-with-workflow-scope> \
   python3 bin/apply-extras.py \
   --skip-knowledge --skip-subagents --skip-skills
 ```
 
-Expected output:
+Default expected output without PAT mode:
 ```
   Code repos : 1 GitHub repo(s)
-    applied connector/github (GitHubOAuth)
+    skipped connector/github (ENABLE_GITHUB_AUTH_CONNECTOR is false)
     applied repo/GrubifyDemo
 ```
 
@@ -203,18 +229,20 @@ Verify:
 ```bash
 AGENT_EP=$(azd env get-values | grep SRE_AGENT_ENDPOINT | cut -d= -f2 | tr -d '"')
 TOKEN=$(az account get-access-token --resource https://azuresre.ai --query accessToken -o tsv)
-curl -s "$AGENT_EP/api/v2/extendedAgent/connectors/github" \
+curl -s "$AGENT_EP/api/v2/extendedAgent/connectors/github/status" \
   -H "Authorization: Bearer $TOKEN" | python3 -c "
 import sys, json
-p = json.load(sys.stdin).get('properties', {})
-print('type:', p.get('dataConnectorType'))
-print('oauth metadata has visible token:', bool((p.get('extendedProperties') or {}).get('accessToken')))
+d = json.load(sys.stdin)
+print('type:', d.get('type'))
+print('healthy:', d.get('healthy'))
+print('status:', d.get('status'))
+print('message:', d.get('message'))
 "
 ```
 
-Expected for OAuth: `type: GitHubOAuth` and no visible token in metadata. OAuth
-tokens are backend-managed and are not expected to be readable from connector
-metadata.
+Expected for default portal/MCP OAuth: the code repo is connected/ready and no
+data-plane `GitHubOAuth` connector is required. OAuth tokens are
+backend-managed and are not expected to be readable from connector metadata.
 
 Also grant `SRE Agent Administrator` to both agent managed identities (otherwise
 the subagent gets 403 when reading its own connector keys at runtime):
@@ -307,11 +335,12 @@ the connector sign-in is disconnected, or agent identities lack SRE Agent
 Administrator.
 
 Fix:
-1. Run Step 5b to apply `connector/github` as `GitHubOAuth`.
-2. In the SRE portal, complete or repair GitHub OAuth sign-in with `repo` and
+1. In the SRE portal, complete or repair GitHub OAuth/MCP sign-in with `repo` and
   `workflow` scopes. For fine-grained PAT connector mode, grant Actions read
   and write permission on the target repo.
-3. Grant `SRE Agent Administrator` to both agent managed identities (see Step 5b).
+2. For repeatable non-portal automation, run Step 5b in explicit PAT connector
+  mode; do not create a data-plane `GitHubOAuth` connector.
+3. Grant `SRE Agent Administrator` to both agent managed identities.
 4. If `azd deploy` was never run, images default to placeholder — run `azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT cr<token>.azurecr.io && azd deploy`.
 
 ### E) Container apps still serve default welcome page after `azd up`
@@ -330,6 +359,10 @@ azd deploy --no-prompt
 - [ ] User has `SRE Agent Administrator` on SRE Agent resource
 - [ ] SRE content applied successfully (knowledge + 6 subagents + 2 skills)
 - [ ] API and frontend container apps are running with real Grubify images
-- [ ] `connector/github` is type `GitHubPat` with non-empty `accessToken`
+- [ ] GitHub repo/auth path is ready: portal GitHub MCP/OAuth is connected with
+  `repo` + `workflow`, or explicit PAT connector mode is configured with
+  workflow permission
+- [ ] `deployment-manager` has `github-mcp/*`, `connectors: [github]`, and the
+  `gh workflow run` fallback in its live prompt
 - [ ] Both agent managed identities have `SRE Agent Administrator` on SRE Agent resource
 - [ ] SRE portal shows expected configuration after refresh

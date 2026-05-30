@@ -23,6 +23,12 @@
     "existingContainerAppsEnvironmentId": {
       "value": "${AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
     },
+    "sreGithubPatKeyVaultName": {
+      "value": "kv-sre-grubify-${GRUBIFY_RESOURCE_TOKEN}"
+    },
+    "sreGithubPatSecretName": {
+      "value": "${SRE_GITHUB_PAT_SECRET_NAME=GH-PAT}"
+    },
     "sreAgentExistingSubnetResourceId": {
       "value": "${EXISTING_SRE_AGENT_SUBNET_RESOURCE_ID}"
     },

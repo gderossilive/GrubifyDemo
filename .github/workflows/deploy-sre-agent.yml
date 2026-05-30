@@ -24,18 +24,24 @@ name: Deploy SRE Agent
 # Optional GitHub Variables:
 #   INCIDENT_NOTIFICATION_EMAIL
 #   TEAMS_TENANT_ID, TEAMS_GROUP_ID, TEAMS_CHANNEL_ID
+#   ENABLE_GITHUB_AUTH_CONNECTOR, GITHUB_AUTH_CONNECTOR_TYPE
+# Optional GitHub Secrets:
+#   GITHUB_PAT                  seeds Key Vault secret GH-PAT for deployment-manager gh workflow run fallback;
+#                               also used only for explicit PAT connector mode when enabled
 
 on:
   workflow_dispatch:
     inputs:
       environment_name:
-        description: "azd environment name (e.g. grubify-demo)"
+        description: "azd environment name"
         required: true
         type: string
+        default: new02
       resource_token:
-        description: "Short token used in resource names (e.g. demo01)"
+        description: "Short token used in resource names"
         required: true
         type: string
+        default: new02
       incident_handler_agent:
         description: "Incident handler subagent name"
         required: true
@@ -129,6 +135,9 @@ jobs:
           TEAMS_TENANT_ID: ${{ vars.TEAMS_TENANT_ID }}
           TEAMS_GROUP_ID: ${{ vars.TEAMS_GROUP_ID }}
           TEAMS_CHANNEL_ID: ${{ vars.TEAMS_CHANNEL_ID }}
+          ENABLE_GITHUB_AUTH_CONNECTOR: ${{ vars.ENABLE_GITHUB_AUTH_CONNECTOR }}
+          GITHUB_AUTH_CONNECTOR_TYPE: ${{ vars.GITHUB_AUTH_CONNECTOR_TYPE }}
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
         run: |
           chmod +x scripts/deploy-sre-agent.sh
           ./scripts/deploy-sre-agent.sh

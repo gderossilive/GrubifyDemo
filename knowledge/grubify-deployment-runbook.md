@@ -79,11 +79,38 @@ OAuth or switch intentionally to PAT connector mode.
 For arbitrary GitHub Actions workflows such as `.github/workflows/deploy-grubify.yml`,
 the current built-in `TriggerWorkflow` tool is demo-specific and should not be
 used unless the platform adds general workflow support. Prefer GitHub MCP if it
-exposes workflow dispatch; otherwise use `RunInTerminal` with `gh workflow run`.
-The `new02` SRE Agent sandbox has been observed with `/usr/bin/gh` version
-2.92.0. Do not use raw terminal `curl` against `api.github.com` unless an
-explicit workflow-capable token is available and every request includes an
-`Authorization` header.
+exposes workflow dispatch. The `new02` SRE Agent sandbox has been observed with
+`/usr/bin/gh` version 2.92.0, but a live `gh workflow run` dispatch returned
+unauthenticated/login-required when no terminal token was exported. The
+repeatable fallback is the SRE Key Vault secret `GH-PAT` in
+`kv-sre-grubify-${resourceToken}`. The deployment-manager retrieves that secret
+inside `RunInTerminal`, exports it as `GH_TOKEN` only for `gh workflow run`, and
+unsets it afterward. Do not use raw terminal `curl` against `api.github.com`
+unless an explicit workflow-capable token is available and every request includes
+an `Authorization` header.
+
+The repeatable SRE content pipeline verifies this path after each apply. Expected
+checks are: deployment-manager has `github-mcp/*`, has `connectors: [github]`,
+and the live prompt retrieves `GH-PAT` from Key Vault for `gh workflow run`. If
+those checks are missing, rerun `python3 bin/assemble-agent.py` and
+`python3 bin/apply-extras.py` or `./scripts/deploy-sre-agent.sh` against the
+target environment.
+
+The authenticated terminal fallback dispatch shape is:
+
+```bash
+az account show >/dev/null 2>&1 || az login --identity --allow-no-subscriptions >/dev/null
+export GH_TOKEN="$(az keyvault secret show --vault-name kv-sre-grubify-new02 --name GH-PAT --query value -o tsv)"
+gh workflow run deploy-grubify.yml \
+	--repo gderossilive/GrubifyDemo \
+	--ref main \
+	-f environment_name=new02 \
+	-f resource_token=new02 \
+	-f release_version=<release-version> \
+	-f release_profile=cart-leak-baseline \
+	-f deploy_mode=deploy
+unset GH_TOKEN
+```
 
 ## Baseline post-deploy validation
 

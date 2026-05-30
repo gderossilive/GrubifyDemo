@@ -72,12 +72,15 @@ def resolve_governance(agent_config: dict[str, Any]) -> dict[str, str]:
 def connector_values(connectors_config: dict[str, Any]) -> dict[str, str]:
     github = connectors_config.get("github") or {}
     teams = connectors_config.get("teams") or {}
+    resource_token = os.environ.get("GRUBIFY_RESOURCE_TOKEN") or os.environ.get("RESOURCE_TOKEN") or "e2e01"
     return {
         "GITHUB_REPO_PLACEHOLDER": os.environ.get("GITHUB_REPO") or f"{github.get('owner', 'gderossilive')}/{github.get('name', 'GrubifyDemo')}",
         "TEAMS_TENANT_ID_PLACEHOLDER": os.environ.get("TEAMS_TENANT_ID") or teams.get("tenantId", ""),
         "TEAMS_GROUP_ID_PLACEHOLDER": os.environ.get("TEAMS_GROUP_ID") or teams.get("groupId", ""),
         "TEAMS_CHANNEL_ID_PLACEHOLDER": os.environ.get("TEAMS_CHANNEL_ID") or teams.get("channelId", ""),
         "AZURESRE_AGENT_ENDPOINT_PLACEHOLDER": os.environ.get("AGENT_ENDPOINT", ""),
+        "SRE_GITHUB_PAT_KEY_VAULT_NAME_PLACEHOLDER": os.environ.get("SRE_GITHUB_PAT_KEY_VAULT_NAME") or f"kv-sre-grubify-{resource_token}",
+        "SRE_GITHUB_PAT_SECRET_NAME_PLACEHOLDER": os.environ.get("SRE_GITHUB_PAT_SECRET_NAME") or "GH-PAT",
     }
 
 

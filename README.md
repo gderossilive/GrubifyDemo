@@ -176,20 +176,74 @@ deployment artifacts. Common overrides include `SRE_AGENT_RESOURCE_GROUP`,
 
 #### Connector toggles
 
-The GitHub auth connector is applied by default so repo-backed subagents and the
-deployment-manager have a repeatable connector reference in every environment.
-The KnowledgeText ARM connectors remain opt-in because knowledge files are
-uploaded through the data-plane knowledge API.
+The GitHub repo entry is applied by default so repo-backed subagents and the
+deployment-manager can resolve `gderossilive/GrubifyDemo`. The data-plane
+`GitHubOAuth` connector is not created by default because the current backend
+marks that connector type deprecated/disconnected; use the SRE portal GitHub
+MCP/repo authorization flow for OAuth. Explicit PAT connector mode remains
+available when fully repeatable non-portal automation is required. The
+KnowledgeText ARM connectors remain opt-in because knowledge files are uploaded
+through the data-plane knowledge API.
 
 | Env var | Default | Effect when `true` |
 | --- | --- | --- |
-| `ENABLE_GITHUB_AUTH_CONNECTOR` | `true` | Creates or updates `connector/github` under **Code Repository**. By default this is `GitHubOAuth`; set `GITHUB_AUTH_CONNECTOR_TYPE=pat` and provide `GITHUB_PAT` only when intentionally using PAT override mode. |
+| `ENABLE_GITHUB_AUTH_CONNECTOR` | `false` | Creates or updates `connector/github` only when intentionally using PAT override mode. Set `GITHUB_AUTH_CONNECTOR_TYPE=pat` and provide `GITHUB_PAT` with workflow permission. Do not use `GitHubOAuth` here; use portal GitHub MCP/repo authorization for OAuth. |
 | `ENABLE_KNOWLEDGE_CONNECTORS` | `false` | Re-adds 9 redundant `knowledge-*` ARM connectors of type `KnowledgeText` under **Other**. Knowledge files in `knowledge/` are uploaded as proper **Knowledge sources** via `/api/v1/agentmemory/upload` regardless of this toggle. |
 
-OAuth connector metadata is expected to omit visible token material. To dispatch
-GitHub Actions workflows, the portal OAuth authorization must include `repo` and
-`workflow` scopes. If the connector is disconnected or lacks scope, re-authorize
-GitHub OAuth in the SRE portal rather than adding an unrelated local PAT.
+#### GitHub PAT Key Vault
+
+Infrastructure provisions a Key Vault in the SRE Agent resource group named
+`kv-sre-grubify-${resourceToken}` by default. The deployment-manager fallback
+expects the workflow-capable PAT in secret `GH-PAT`. Bicep grants both SRE Agent
+identities `Key Vault Secrets User` on the vault so the SRE Agent terminal can
+retrieve the secret at dispatch time.
+
+Set or rotate the PAT without printing it:
+
+```bash
+read -rsp "GitHub PAT: " GITHUB_PAT && echo
+az keyvault secret set \
+	--vault-name kv-sre-grubify-<token> \
+	--name GH-PAT \
+	--value "$GITHUB_PAT" \
+	--output none
+unset GITHUB_PAT
+```
+
+`./scripts/deploy-sre-agent.sh` can also seed/update that secret when
+`GITHUB_PAT` is present in the caller environment or GitHub Actions secret.
+The script never prints the secret value.
+
+For the validated `new02` path, deployment-manager is configured with
+`github-mcp/*` and `connectors: [github]`. It tries GitHub MCP workflow dispatch
+first if available. The `new02` SRE Agent sandbox has been observed with
+`/usr/bin/gh` version 2.92.0, but `gh workflow run` returned
+unauthenticated/login-required when no terminal token was exported. The fallback
+now retrieves `GH-PAT` from the SRE Key Vault, exports it as `GH_TOKEN` only for
+the `gh workflow run` command, and unsets it afterward. Raw terminal `curl` to
+`api.github.com` must include an explicit
+`Authorization` header and is not the default path.
+
+To dispatch GitHub Actions workflows, the portal OAuth authorization or PAT
+connector must include workflow permission: `repo` + `workflow` for OAuth/classic
+PAT, or Actions read/write for a fine-grained PAT. If the connector is
+disconnected or lacks scope, re-authorize GitHub in the SRE portal or
+intentionally enable PAT connector mode.
+
+`./scripts/deploy-sre-agent.sh` verifies the live deployment path after applying
+content. The expected `new02` output includes:
+
+```text
+==> GitHub deployment-manager path
+	OK github-mcp is attached to deployment-manager
+	OK github connector reference is attached to deployment-manager
+	OK deployment-manager prompt retrieves GH-PAT from Key Vault for gh workflow run
+```
+
+If the connector status is not healthy, repair the SRE portal GitHub MCP/repo
+authorization. If GitHub MCP does not expose workflow dispatch, authenticate
+`gh` in the SRE Agent terminal or provide an explicit workflow-capable terminal
+token before running the deployment-manager scenario.
 
 Leave `ENABLE_KNOWLEDGE_CONNECTORS` at the default unless you specifically need
 the redundant portal entries. When redundant knowledge connectors were

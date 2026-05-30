@@ -102,6 +102,7 @@ SRE_RG="$(first_non_empty "$(azd_value SRE_AGENT_RESOURCE_GROUP)" "${SRE_RG:-}" 
 AGENT_NAME="$(first_non_empty "$(azd_value SRE_AGENT_NAME)" "${AGENT_NAME:-}" "${SRE_AGENT_NAME:-}" "sre-agent-grubify")"
 AGENT_ENDPOINT="$(first_non_empty "$(azd_value SRE_AGENT_ENDPOINT)" "${AGENT_ENDPOINT:-}" "${SRE_AGENT_ENDPOINT:-}")"
 AGT_FUNCTION_URL="$(first_non_empty "$(azd_value AGT_FUNCTION_URL)" "${AGT_FUNCTION_URL:-}")"
+SRE_GITHUB_PAT_SECRET_NAME="$(first_non_empty "$(azd_value SRE_GITHUB_PAT_SECRET_NAME)" "${SRE_GITHUB_PAT_SECRET_NAME:-}" "GH-PAT")"
 
 RESOURCE_TOKEN_FILE="${REPO_ROOT}/.azure/resource-token"
 RESOURCE_TOKEN="$(first_non_empty "$(azd_value GRUBIFY_RESOURCE_TOKEN)" "${GRUBIFY_RESOURCE_TOKEN:-}" "${RESOURCE_TOKEN:-}")"
@@ -113,6 +114,10 @@ if [[ -z "$APP_RG" && -n "$RESOURCE_TOKEN" ]]; then
 fi
 if [[ -z "$SRE_RG" && -n "$RESOURCE_TOKEN" ]]; then
   SRE_RG="rg-grubify-sre-${RESOURCE_TOKEN}"
+fi
+SRE_GITHUB_PAT_KEY_VAULT_NAME="$(first_non_empty "$(azd_value SRE_GITHUB_PAT_KEY_VAULT_NAME)" "${SRE_GITHUB_PAT_KEY_VAULT_NAME:-}")"
+if [[ -z "$SRE_GITHUB_PAT_KEY_VAULT_NAME" && -n "$RESOURCE_TOKEN" ]]; then
+  SRE_GITHUB_PAT_KEY_VAULT_NAME="kv-sre-grubify-${RESOURCE_TOKEN}"
 fi
 
 if [[ -z "$SUBSCRIPTION" ]]; then
@@ -261,6 +266,8 @@ run_v2_flow() {
     SRE_AGENT_NAME="$AGENT_NAME" \
     SRE_AGENT_RESOURCE_GROUP="$SRE_RG" \
     SRE_AGENT_ENDPOINT="$AGENT_ENDPOINT" \
+    SRE_GITHUB_PAT_KEY_VAULT_NAME="$SRE_GITHUB_PAT_KEY_VAULT_NAME" \
+    SRE_GITHUB_PAT_SECRET_NAME="$SRE_GITHUB_PAT_SECRET_NAME" \
     GITHUB_REPO="${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}" \
     TEAMS_TENANT_ID="$TEAMS_TENANT_ID" \
     TEAMS_GROUP_ID="$TEAMS_GROUP_ID" \
@@ -274,6 +281,11 @@ run_v2_flow() {
     SRE_AGENT_NAME="$AGENT_NAME" \
     SRE_AGENT_RESOURCE_GROUP="$SRE_RG" \
     SRE_AGENT_ENDPOINT="$AGENT_ENDPOINT" \
+    SRE_GITHUB_PAT_KEY_VAULT_NAME="$SRE_GITHUB_PAT_KEY_VAULT_NAME" \
+    SRE_GITHUB_PAT_SECRET_NAME="$SRE_GITHUB_PAT_SECRET_NAME" \
+    ENABLE_GITHUB_AUTH_CONNECTOR="${ENABLE_GITHUB_AUTH_CONNECTOR:-}" \
+    GITHUB_AUTH_CONNECTOR_TYPE="${GITHUB_AUTH_CONNECTOR_TYPE:-}" \
+    GITHUB_PAT="${GITHUB_PAT:-}" \
       python3 bin/apply-extras.py
   )
 }
@@ -686,12 +698,105 @@ for tool in payload if isinstance(payload, list) else []:
   fi
 }
 
+upsert_github_pat_secret() {
+  if [[ -z "${GITHUB_PAT:-}" ]]; then
+    echo "==> GitHub PAT Key Vault secret"
+    echo "  INFO GITHUB_PAT is not set; leaving ${SRE_GITHUB_PAT_SECRET_NAME} unchanged in ${SRE_GITHUB_PAT_KEY_VAULT_NAME}"
+    return
+  fi
+
+  echo "==> GitHub PAT Key Vault secret"
+  if az keyvault secret set \
+    --vault-name "$SRE_GITHUB_PAT_KEY_VAULT_NAME" \
+    --name "$SRE_GITHUB_PAT_SECRET_NAME" \
+    --value "$GITHUB_PAT" \
+    --output none; then
+    echo "  OK ${SRE_GITHUB_PAT_SECRET_NAME} stored in Key Vault ${SRE_GITHUB_PAT_KEY_VAULT_NAME}"
+  else
+    echo "  WARN could not set ${SRE_GITHUB_PAT_SECRET_NAME} in ${SRE_GITHUB_PAT_KEY_VAULT_NAME}" >&2
+    echo "  Grant the current principal Key Vault Secrets Officer on the vault, then run:" >&2
+    echo "    az keyvault secret set --vault-name ${SRE_GITHUB_PAT_KEY_VAULT_NAME} --name ${SRE_GITHUB_PAT_SECRET_NAME} --value <pat>" >&2
+  fi
+}
+
+verify_github_deployment_path() {
+  local agent_json
+  local connector_status
+  local workflow_tools
+  local temp_dir
+
+  echo "==> GitHub deployment-manager path"
+  agent_json="$(curl -sf "${AGENT_ENDPOINT}/api/v2/extendedAgent/agents/deployment-manager" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null || true)"
+  connector_status="$(curl -sf "${AGENT_ENDPOINT}/api/v2/extendedAgent/connectors/github/status" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null || true)"
+  workflow_tools="$(curl -sf "${AGENT_ENDPOINT}/api/v1/extendedAgent/systemtools" \
+    -H "Authorization: Bearer $AZURESRE_TOKEN" 2>/dev/null || true)"
+
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' RETURN
+  printf '%s' "$agent_json" >"$temp_dir/agent.json"
+  printf '%s' "$connector_status" >"$temp_dir/connector-status.json"
+  printf '%s' "$workflow_tools" >"$temp_dir/systemtools.json"
+
+  python3 - "$temp_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload_dir = Path(sys.argv[1])
+
+def load(path, fallback):
+    try:
+        raw = path.read_text(encoding="utf-8")
+        return json.loads(raw) if raw else fallback
+    except Exception:
+        return fallback
+
+agent = load(payload_dir / "agent.json", {})
+status = load(payload_dir / "connector-status.json", {})
+tools_payload = load(payload_dir / "systemtools.json", [])
+properties = agent.get("properties") or {}
+text = str(properties)
+mcp_tools = properties.get("mcpTools") or []
+connectors = properties.get("connectors") or []
+tools = tools_payload if isinstance(tools_payload, list) else tools_payload.get("value", tools_payload.get("items", []))
+tool_names = {item.get("name") for item in tools if isinstance(item, dict)}
+
+print(f"  deployment-manager mcpTools: {mcp_tools}")
+print(f"  deployment-manager connectors: {connectors}")
+print(f"  github connector status: {status.get('status', '<unknown>')} ({status.get('type', '<unknown>')})")
+print(f"  github connector healthy: {status.get('healthy', '<unknown>')}")
+
+if "github-mcp/*" in mcp_tools:
+    print("  OK github-mcp is attached to deployment-manager")
+else:
+    print("  WARN github-mcp is not attached to deployment-manager")
+
+if "github" in connectors:
+    print("  OK github connector reference is attached to deployment-manager")
+else:
+    print("  WARN github connector reference is not attached to deployment-manager")
+
+if "gh workflow run" in text and "Key Vault secret" in text and "GH-PAT" in text:
+  print("  OK deployment-manager prompt retrieves GH-PAT from Key Vault for gh workflow run")
+else:
+  print("  WARN deployment-manager prompt does not contain the Key Vault GH-PAT fallback")
+
+if "TriggerWorkflow" in tool_names:
+    print("  INFO built-in TriggerWorkflow tool is present; deployment-manager should use it only for supported demo workflow names")
+else:
+    print("  INFO built-in TriggerWorkflow tool is not exposed in this environment")
+PY
+}
+
 echo "==> Grubify SRE Agent v2 extras"
 echo "    Subscription : $SUBSCRIPTION"
 echo "    App RG       : ${APP_RG:-<unknown>}"
 echo "    SRE RG       : $SRE_RG"
 echo "    Agent        : $AGENT_NAME"
 echo "    Endpoint     : ${AGENT_ENDPOINT:-<resolve after azd>}"
+echo "    GitHub PAT KV: ${SRE_GITHUB_PAT_KEY_VAULT_NAME}/${SRE_GITHUB_PAT_SECRET_NAME}"
 echo "    ServiceNow   : $SERVICENOW_HANDLER_ENABLED"
 echo "    Teams        : $TEAMS_CONNECTOR_ENABLED"
 
@@ -701,6 +806,9 @@ run_v2_flow
 deploy_arm_connectors
 
 AZURESRE_TOKEN="$(get_sre_token)"
+
+upsert_github_pat_secret
+verify_github_deployment_path
 
 echo "==> Teams extras"
 verify_teams_connector

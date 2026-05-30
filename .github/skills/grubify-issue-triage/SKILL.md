@@ -24,14 +24,22 @@ cd /workspaces/GrubifyDemo
 
 ## Step 1: Verify prerequisites
 
-### 1a) GitHub PAT and user are configured
+### 1a) GitHub auth is configured
+
+The SRE Agent `issue-triager` uses the connected GitHub repo/MCP authorization
+inside the agent. A local PAT is only needed for the operator shell step that
+seeds sample issues with raw GitHub REST calls.
+
+For the operator-side seeding step, configure a PAT and user:
 
 ```bash
 azd env get-value GITHUB_PAT 2>/dev/null | head -c 10 && echo "... (PAT set)"
 azd env get-value GITHUB_USER 2>/dev/null
 ```
 
-Both must return values. The PAT needs `repo` scope.
+Both must return values only if you plan to create the sample issues from the
+shell. The PAT needs `repo` scope, or equivalent fine-grained Issues read/write
+permission on the target repository.
 
 ### 1b) Verify the issue-triager subagent exists on the SRE Agent
 
@@ -115,7 +123,9 @@ After the triager runs, check GitHub issues in the target repo. Each `[Customer 
 
 ## Constraints
 
-- Requires `GITHUB_PAT` with `repo` scope
-- The GitHub MCP connector must be active on the SRE Agent
+- Seeding sample issues from the shell requires `GITHUB_PAT` with `repo` scope,
+  or equivalent fine-grained Issues read/write permission
+- The SRE Agent GitHub MCP/repo authorization must be active for the
+  `issue-triager` to label/comment through the agent
 - Issue titles must contain `[Customer Issue]` to be picked up by the triager
 - Do not manually label or comment on the issues — let the agent do it

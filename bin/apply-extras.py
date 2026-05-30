@@ -239,7 +239,7 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
     # GitHubPat connector when an environment intentionally opts into PAT mode.
     enable_github_auth = os.environ.get("ENABLE_GITHUB_AUTH_CONNECTOR", "false").lower() in {"1", "true", "yes"}
     github_pat = os.environ.get("GITHUB_PAT")
-    auth_type = os.environ.get("GITHUB_AUTH_CONNECTOR_TYPE", "oauth").strip().lower()
+    auth_type = (os.environ.get("GITHUB_AUTH_CONNECTOR_TYPE") or "oauth").strip().lower()
     if auth_type not in {"pat", "oauth"}:
         raise RuntimeError("GITHUB_AUTH_CONNECTOR_TYPE must be 'pat' or 'oauth'")
     if dry_run:

@@ -53,6 +53,7 @@ resource group. By default, resource names use a five-character
 | Application Insights | `Microsoft.Insights/components` | `appi-sre-grubify` | Stores SRE Agent telemetry |
 | User-assigned managed identity | `Microsoft.ManagedIdentity/userAssignedIdentities` | `id-sre-grubify` | Agent action and knowledge graph identity |
 | SRE Agent | `Microsoft.App/agents` | `sre-agent-grubify` | Incident detection and remediation |
+| Key Vault | `Microsoft.KeyVault/vaults` | `kv-sre-grubify-${resourceToken}` | Stores GitHub Actions PAT secret `GH-PAT` for deployment-manager fallback |
 | Action Group | `Microsoft.Insights/actionGroups` | `ag-sre-grubify` | Alert action target |
 | Metric alert | `Microsoft.Insights/metricAlerts` | `alert-http-5xx-grubify` | Triggers on backend HTTP 5xx |
 | ServiceNow Logic App | `Microsoft.Logic/workflows` | `la-grubify-servicenow-handler` | Opens ServiceNow incidents from alerts |
@@ -266,6 +267,21 @@ or the GitHub MCP connection with `repo` and `workflow` scopes for the no-PAT
 path. For fully repeatable non-portal automation, explicitly set
 `ENABLE_GITHUB_AUTH_CONNECTOR=true`, `GITHUB_AUTH_CONNECTOR_TYPE=pat`, and
 `GITHUB_PAT` so `bin/apply-extras.py` creates a `GitHubPat` connector.
+
+For the `new02` deployment flow, `deployment-manager` is configured with
+`github-mcp/*` and `connectors: [github]`. It uses GitHub MCP for workflow
+dispatch if available. The `new02` SRE Agent sandbox has been observed with
+`/usr/bin/gh` version 2.92.0, but `gh workflow run` returned
+unauthenticated/login-required without terminal auth. Infra now provisions an SRE
+Key Vault and grants both SRE Agent identities `Key Vault Secrets User`; the
+deployment-manager fallback reads secret `GH-PAT`, exports it as `GH_TOKEN` for
+`gh workflow run`, and unsets it afterward. Raw REST must include an
+`Authorization` header on every request.
+
+The repeatable pipeline defaults both `Deploy Grubify` and `Deploy SRE Agent`
+manual workflow inputs to `new02`, and `scripts/deploy-sre-agent.sh` verifies
+the live deployment-manager GitHub path and Key Vault `GH-PAT` fallback wording
+after applying content.
 
 Likewise, the assembler no longer emits `KnowledgeText` ARM connectors for each
 markdown file in `knowledge/` (`ENABLE_KNOWLEDGE_CONNECTORS=false` by default).
