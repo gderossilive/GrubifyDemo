@@ -1,0 +1,25 @@
+# Patch Manager Subagent
+# Assesses Grubify container image freshness/security signals and Azure VM
+# patch state, then schedules approved maintenance through the appropriate
+# control plane.
+api_version: azuresre.ai/v1
+kind: AgentConfiguration
+spec:
+  name: patch-manager
+  system_prompt_file: instructions/patch-manager.instructions.md
+  skill_files:
+    - skills/patch-manager-update-orchestration.skill.md
+  handoff_description: Assesses container and VM update needs, reports evidence, and schedules confirmed maintenance through deployment-manager or Azure Update Manager
+  agent_type: Autonomous
+  tools:
+    - SearchMemory
+    - RunAzCliReadCommands
+    - RunAzCliWriteCommands
+    - GetAzCliHelp
+    - QueryLogAnalyticsByWorkspaceId
+    - QueryAppInsightsByResourceId
+    - ExecutePythonCode
+  mcp_tools:
+    - github-mcp/*
+  connectors:
+    - github

@@ -15,7 +15,8 @@
     "incident-handler",
     "incident-handler-agt",
     "deployment-manager",
-    "tests-manager"
+    "tests-manager",
+    "patch-manager"
   ],
   "hooks": [],
   "commonPrompts": [],
@@ -37,6 +38,7 @@
     "grubify-tests-runbook.md",
     "http-500-errors.md",
     "incident-report-template.md",
+    "patch-update-management.md",
     "servicenow-incident-flow.md",
     "teams-messaging-runbook.md"
   ]

@@ -30,7 +30,8 @@
       "incident-handler-core",
       "incident-handler-agt",
       "deployment-manager",
-      "tests-manager"
+      "tests-manager",
+      "patch-manager"
     ]
   }
 }

@@ -1,0 +1,10 @@
+{
+  "python.terminal.useEnvFile": true,
+  "azureFunctions.deploySubpath": "sre-config/governance/function_app",
+  "azureFunctions.scmDoBuildDuringDeployment": true,
+  "azureFunctions.pythonVenv": ".venv",
+  "azureFunctions.projectLanguage": "Python",
+  "azureFunctions.projectRuntime": "~4",
+  "debug.internalConsoleOptions": "neverOpen",
+  "azureFunctions.projectSubpath": "sre-config/governance/function_app"
+}
