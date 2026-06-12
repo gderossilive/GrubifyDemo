@@ -36,6 +36,8 @@ hooks:
       echo "Grubify Food Delivery App deployed successfully!"
       echo "Frontend URL: $FRONTEND_URL"
       echo "API URL: $API_BASE_URL"
-      echo "AGT Governance URL: $AGT_FUNCTION_URL"
+      if [ "${ENABLE_AGT_GOVERNANCE:-true}" = "true" ]; then
+        echo "AGT Governance URL: $AGT_FUNCTION_URL"
+      fi
       echo "SRE Agent: $SRE_AGENT_NAME"
       echo "SRE Agent Endpoint: $SRE_AGENT_ENDPOINT"

@@ -157,6 +157,7 @@ jobs:
           # explicitly here.
           azd env set SRE_AGENT_RESOURCE_GROUP "rg-grubify-sre-$AZURE_RESOURCE_TOKEN"
           azd env set AGT_FUNCTION_URL "https://func-agt-grubify-$AZURE_RESOURCE_TOKEN.azurewebsites.net"
+          azd env set ENABLE_LOG_ANALYTICS_CONNECTOR true
           azd env set RELEASE_VERSION "$RELEASE_VERSION"
           azd env set RELEASE_PROFILE "$RELEASE_PROFILE"
 
@@ -182,17 +183,18 @@ jobs:
         # Docker is preinstalled and the ACR Task log-blob polling is flaky
         # ("BlobNotFound" 404 even when the image was built and pushed),
         # which makes azd declare the deploy a failure. Build locally and
-        # push to ACR instead. Also strip the postdeploy hook — this
-        # workflow only ships a new app release, SRE Agent data-plane
-        # provisioning (assemble-agent.py + apply-extras.py) is run from
-        # the operator's workstation, not from CI.
+        # push to ACR instead. For app-only `deploy`, strip the postdeploy
+        # hook; for fresh `up`, keep it so SRE Agent data-plane setup can
+        # apply repositories, knowledge, subagents, and the logs connector.
         run: |
           # Remove the `    docker:\n      remoteBuild: true` block wherever
           # it appears under a service definition.
           sed -i -e '/^    docker:$/{N;/\n      remoteBuild: true$/d;}' azure.yaml
-          # Drop the postdeploy hook (and everything after it, since it's the
-          # last block in the file).
-          sed -i -e '/^  postdeploy:$/,$d' azure.yaml
+          if [ "${{ inputs.deploy_mode }}" = "deploy" ]; then
+            # Drop the postdeploy hook (and everything after it, since it's the
+            # last block in the file).
+            sed -i -e '/^  postdeploy:$/,$d' azure.yaml
+          fi
           echo "--- azure.yaml after patch ---"
           cat azure.yaml
 

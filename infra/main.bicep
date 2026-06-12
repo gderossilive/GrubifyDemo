@@ -47,6 +47,9 @@ param sreGithubPatKeyVaultName string = 'kv-sre-grubify-${resourceToken}'
 @description('Name of the Key Vault secret containing the GitHub PAT used by deployment-manager fallback workflow dispatch.')
 param sreGithubPatSecretName string = 'GH-PAT'
 
+@description('Enable AGT governance Function App deployment and governed SRE Agent hooks.')
+param enableAgtGovernance bool = true
+
 @allowed([
   'Low'
   'Medium'
@@ -101,6 +104,7 @@ param sreAgentSubnetAddressPrefix string = '10.80.0.0/24'
 var abbrs = loadJsonContent('abbreviations.json')
 var tags = { 'azd-env-name': environmentName }
 var useExistingEnv = !empty(existingContainerAppsEnvironmentId)
+var useAgtGovernance = enableAgtGovernance
 var useSreAgentVnetIntegration = enableSreAgentVnetIntegration
 var useExistingSreAgentSubnet = useSreAgentVnetIntegration && !empty(sreAgentExistingSubnetResourceId)
 var existingEnvRg = useExistingEnv ? split(existingContainerAppsEnvironmentId, '/')[4] : 'placeholder'
@@ -110,6 +114,7 @@ var governanceStorageName = 'stagtgrubify${resourceToken}'
 var governancePlanName = 'plan-agt-grubify-${resourceToken}'
 var monitoringReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
 var contributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+var sreAgentAdministratorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'e79298df-d852-4c6d-84f9-5d13249d1e55')
 
 // Organize resources in a resource group
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
@@ -157,6 +162,7 @@ module existingEnvLookup 'core/host/container-apps-environment-existing.bicep' =
 
 var envId = useExistingEnv ? existingContainerAppsEnvironmentId : containerAppsEnvironment!.outputs.id
 var envDefaultDomain = useExistingEnv ? existingEnvLookup!.outputs.defaultDomain : containerAppsEnvironment!.outputs.defaultDomain
+var appLogAnalyticsWorkspaceId = useExistingEnv ? '' : containerAppsEnvironment!.outputs.logAnalyticsWorkspaceId
 
 // Container app for the API
 module api 'core/host/container-app.bicep' = {
@@ -212,8 +218,20 @@ module frontend 'core/host/container-app.bicep' = {
   }
 }
 
+module grubifyHttp5xxAlert 'core/host/container-app-5xx-alert.bicep' = {
+  name: 'grubify-http-5xx-alert'
+  scope: sreRg
+  params: {
+    name: 'alert-http-5xx-grubify'
+    location: location
+    tags: tags
+    targetResourceId: api.outputs.id
+    targetResourceRegion: location
+  }
+}
+
 // AGT governance Function App for SRE Agent hook policy evaluation
-module governanceFunction 'core/host/governance-function.bicep' = {
+module governanceFunction 'core/host/governance-function.bicep' = if (useAgtGovernance) {
   name: 'governance-function'
   scope: rg
   params: {
@@ -334,6 +352,19 @@ module sreAgentExtensions 'core/host/sre-agent-extensions.bicep' = if (!empty(sr
   }
 }
 
+module deployerSreAgentAdministrator 'core/host/sre-agent-admin-role-assignment.bicep' = {
+  name: 'deployer-sre-agent-admin'
+  scope: sreRg
+  params: {
+    agentName: sreAgentName
+    roleDefinitionId: sreAgentAdministratorRoleDefinitionId
+    principalId: deployer().objectId
+  }
+  dependsOn: [
+    sreAgent
+  ]
+}
+
 // App outputs
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
@@ -343,13 +374,14 @@ output SRE_AGENT_RESOURCE_GROUP string = sreRg.name
 
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerRegistry.outputs.loginServer
 output AZURE_CONTAINER_REGISTRY_NAME string = containerRegistry.outputs.name
+output APP_LOG_ANALYTICS_WORKSPACE_ID string = appLogAnalyticsWorkspaceId
 
 output API_BASE_URL string = 'https://${api.outputs.fqdn}'
 output FRONTEND_URL string = 'https://${frontend.outputs.fqdn}'
-output AGT_FUNCTION_URL string = governanceFunction.outputs.functionAppUrl
-output AGT_FUNCTION_NAME string = governanceFunction.outputs.functionAppName
-output AGT_FUNCTION_PRINCIPAL_ID string = governanceFunction.outputs.functionAppPrincipalId
-output SERVICE_GOVERNANCE_NAME string = governanceFunction.outputs.functionAppName
+output AGT_FUNCTION_URL string = useAgtGovernance ? governanceFunction!.outputs.functionAppUrl : ''
+output AGT_FUNCTION_NAME string = useAgtGovernance ? governanceFunction!.outputs.functionAppName : ''
+output AGT_FUNCTION_PRINCIPAL_ID string = useAgtGovernance ? governanceFunction!.outputs.functionAppPrincipalId : ''
+output SERVICE_GOVERNANCE_NAME string = useAgtGovernance ? governanceFunction!.outputs.functionAppName : ''
 output SRE_AGENT_NAME string = sreAgent.outputs.agentName
 output SRE_AGENT_ID string = sreAgent.outputs.agentId
 output SRE_AGENT_ENDPOINT string = sreAgent.outputs.agentEndpoint
@@ -365,3 +397,4 @@ output SRE_AGENT_NAT_PUBLIC_IP string = !useSreAgentVnetIntegration || useExisti
 output SRE_LOG_ANALYTICS_WORKSPACE_ID string = sreObservability.outputs.logAnalyticsWorkspaceId
 output SRE_APP_INSIGHTS_RESOURCE_ID string = sreObservability.outputs.applicationInsightsId
 output SRE_APP_INSIGHTS_APP_ID string = sreObservability.outputs.applicationInsightsAppId
+output GRUBIFY_HTTP_5XX_ALERT_ID string = grubifyHttp5xxAlert.outputs.id

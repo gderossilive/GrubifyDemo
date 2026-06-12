@@ -24,7 +24,7 @@
   "responsePlans": [
     {
       "name": "grubify-http-errors",
-      "handlingAgent": "incident-handler-agt"
+      "handlingAgent": "incident-handler"
     }
   ],
   "repos": [

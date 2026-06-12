@@ -333,6 +333,71 @@ def apply_github_repos(endpoint: str, token: str, repos: list[dict[str, Any]], i
         print(f"    applied repo/{name}")
 
 
+def apply_connectors(endpoint: str, token: str, entries: list[dict[str, Any]], identity: str, dry_run: bool) -> None:
+    if not entries:
+        print("  Connectors: none")
+        return
+    print(f"  Connectors: {len(entries)} connector(s)")
+    for entry in entries:
+        name = entry.get("name")
+        if not name:
+            raise RuntimeError(f"Invalid connector entry (missing name): {entry}")
+
+        properties = dict(entry.get("properties") or {})
+        properties.setdefault("identity", identity)
+        if dry_run:
+            connector_type = properties.get("dataConnectorType", "unknown")
+            print(f"    would apply connector/{name} ({connector_type})")
+            continue
+
+        body = json.dumps({
+            "name": name,
+            "type": "AgentConnector",
+            "properties": properties,
+        }).encode("utf-8")
+
+        encoded_name = urllib.parse.quote(name, safe="")
+        status, response = http_call("PUT", f"{endpoint}/api/v2/extendedAgent/connectors/{encoded_name}", token, body)
+        if status not in {200, 201, 202, 204}:
+            raise RuntimeError(f"Connector apply failed for {name} (HTTP {status}): {response.decode(errors='replace')[:500]}")
+        print(f"    applied connector/{name}")
+
+
+def apply_response_plans(endpoint: str, token: str, entries: list[dict[str, Any]], dry_run: bool) -> None:
+    if not entries:
+        print("  Response plans: none")
+        return
+    print(f"  Response plans: {len(entries)} plan(s)")
+    for entry in entries:
+        filter_config = dict(entry.get("filter") or {})
+        filter_id = filter_config.get("id") or entry.get("name")
+        if not filter_id:
+            raise RuntimeError(f"Invalid response plan entry (missing filter id): {entry}")
+
+        filter_config.setdefault("id", filter_id)
+        filter_config.setdefault("titleContains", os.environ.get("ALERT_NAME", "alert-http-5xx-grubify"))
+        filter_config.setdefault("handlingAgent", os.environ.get("INCIDENT_HANDLER_AGENT", "incident-handler"))
+        filter_config.setdefault("agentMode", entry.get("agentMode") or "autonomous")
+        filter_config.setdefault("isEnabled", True)
+        filter_config.setdefault("maxAutomatedInvestigationAttempts", 3)
+        filter_config.setdefault("deepInvestigationEnabled", False)
+        filter_config.setdefault("mergeEnabled", True)
+        filter_config.setdefault("mergeWindowHours", 3)
+
+        if dry_run:
+            print(f"    would apply response-plan/{filter_id}")
+            continue
+
+        body = json.dumps(filter_config).encode("utf-8")
+        encoded_id = urllib.parse.quote(str(filter_id), safe="")
+        status, response = http_call("PUT", f"{endpoint}/api/v1/incidentPlayground/filters/{encoded_id}", token, body)
+        if status == 409:
+            status, response = http_call("POST", f"{endpoint}/api/v1/incidentPlayground/filters/{encoded_id}", token, body)
+        if status not in {200, 201, 202, 204}:
+            raise RuntimeError(f"Response plan apply failed for {filter_id} (HTTP {status}): {response.decode(errors='replace')[:500]}")
+        print(f"    applied response-plan/{filter_id}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Apply Grubify SRE Agent v2 data-plane extras.")
     parser.add_argument("--extras", default=str(DEFAULT_EXTRAS_PATH))
@@ -344,7 +409,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-knowledge", action="store_true")
     parser.add_argument("--skip-skills", action="store_true")
     parser.add_argument("--skip-subagents", action="store_true")
+    parser.add_argument("--skip-connectors", action="store_true")
     parser.add_argument("--skip-repos", action="store_true")
+    parser.add_argument("--skip-response-plans", action="store_true")
     parser.add_argument("--skip-verify", action="store_true", help="Reserved for parity with the PI-Buddy v2 workflow.")
     return parser.parse_args()
 
@@ -385,8 +452,12 @@ def main() -> int:
         apply_skills(endpoint, token, extras.get("skills") or [], args.dry_run)
     if not args.skip_subagents:
         apply_subagents(endpoint, token, extras.get("subagents") or [], args.dry_run)
+    if not args.skip_connectors:
+        apply_connectors(endpoint, token, extras.get("connectors") or [], identity, args.dry_run)
     if not args.skip_repos:
         apply_github_repos(endpoint, token, extras.get("repos") or [], identity, args.dry_run)
+    if not args.skip_response_plans:
+        apply_response_plans(endpoint, token, extras.get("responsePlans") or [], args.dry_run)
 
     if args.skip_verify:
         print("  Verify       : skipped")

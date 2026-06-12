@@ -11,7 +11,7 @@ spec:
   titleContainsAny: []
   titleNotContains: []
   agentMode: autonomous
-  handlingAgent: incident-handler-agt
+  handlingAgent: incident-handler
   owningTeamId: ''
   owningTeamIds: []
   maxAutomatedInvestigationAttempts: 3

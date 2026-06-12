@@ -59,6 +59,38 @@ def env_or_config(env_name: str, value: str, default: str = "") -> str:
     return os.environ.get(env_name) or value or default
 
 
+def env_flag(env_name: str, default: bool) -> bool:
+    raw = os.environ.get(env_name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def bool_value(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        if not value.strip():
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def agt_governance_enabled() -> bool:
+    return env_flag("ENABLE_AGT_GOVERNANCE", True)
+
+
+def infer_app_log_analytics_workspace_id() -> str:
+    subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
+    resource_group = os.environ.get("AZURE_RESOURCE_GROUP", "")
+    resource_token = os.environ.get("GRUBIFY_RESOURCE_TOKEN") or os.environ.get("RESOURCE_TOKEN") or os.environ.get("AZURE_ENV_NAME", "")
+    if not subscription_id or not resource_group or not resource_token:
+        return ""
+    return f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.OperationalInsights/workspaces/cae-{resource_token}-logs"
+
+
 def resolve_governance(agent_config: dict[str, Any]) -> dict[str, str]:
     governance = agent_config.get("governance") or {}
     return {
@@ -234,6 +266,25 @@ def build_incident_platform_entries(incident_platforms_dir: Path) -> list[dict[s
     return entries
 
 
+def build_response_plan_entries(response_plans_dir: Path) -> list[dict[str, Any]]:
+    if not response_plans_dir.exists():
+        return []
+    entries = []
+    for path in sorted(response_plans_dir.glob("*.yaml")):
+        data = load_yaml(path)
+        filter_config = data.get("responsePlanFilter") or {}
+        if not filter_config:
+            continue
+        entries.append({
+            "name": filter_config.get("id") or data.get("name") or path.stem,
+            "source": str(path.relative_to(PROJECT_DIR)),
+            "filter": filter_config,
+            "agentPrompt": data.get("agentPrompt", ""),
+            "agentMode": data.get("agentMode", filter_config.get("agentMode", "autonomous")),
+        })
+    return entries
+
+
 def build_repo_entries(connectors_config: dict[str, Any]) -> list[dict[str, Any]]:
     github = connectors_config.get("github") or {}
     repo = os.environ.get("GITHUB_REPO")
@@ -252,6 +303,36 @@ def build_repo_entries(connectors_config: dict[str, Any]) -> list[dict[str, Any]
             "branch": github.get("branch", "main"),
         },
     }]
+
+
+def build_agent_connectors(connectors_config: dict[str, Any]) -> list[dict[str, Any]]:
+    toggles = connectors_config.get("toggles") or {}
+    connectors = list(connectors_config.get("connectors", []))
+
+    enable_log_analytics = env_flag(
+        "ENABLE_LOG_ANALYTICS_CONNECTOR",
+        bool_value(toggles.get("enableLogAnalyticsConnector"), False),
+    )
+    log_analytics_workspace_id = env_or_config(
+        "LOG_ANALYTICS_WORKSPACE_RESOURCE_ID",
+        env_or_config("APP_LOG_ANALYTICS_WORKSPACE_ID", connectors_config.get("lawResourceId", "")),
+    ) or infer_app_log_analytics_workspace_id()
+
+    if enable_log_analytics:
+        if log_analytics_workspace_id and not any((connector.get("name") or "").lower() == "logs" for connector in connectors):
+            connectors.append({
+                "name": "logs",
+                "properties": {
+                    "dataConnectorType": "LogAnalytics",
+                    "dataSource": log_analytics_workspace_id,
+                    "extendedProperties": {
+                        "workspaceResourceId": log_analytics_workspace_id,
+                    },
+                    "identity": "system",
+                },
+            })
+
+    return connectors
 
 
 def build_skill_entries(agents_dir: Path, requested_agents: list[str], replacements: dict[str, str]) -> list[dict[str, Any]]:
@@ -310,7 +391,7 @@ def build_parameters(agent_config: dict[str, Any], connectors_config: dict[str, 
     # show as "Connecting" in the SRE portal, so they are skipped unless explicitly
     # opted in via ENABLE_KNOWLEDGE_CONNECTORS=true.
     enable_knowledge_connectors = os.environ.get("ENABLE_KNOWLEDGE_CONNECTORS", "false").lower() in {"1", "true", "yes"}
-    connectors = list(connectors_config.get("connectors", []))
+    connectors = build_agent_connectors(connectors_config)
     if enable_knowledge_connectors:
         connectors.extend(build_knowledge_connector_entries(knowledge_dir))
     return {
@@ -329,7 +410,7 @@ def build_parameters(agent_config: dict[str, Any], connectors_config: dict[str, 
             "sreConnectorToggles": toggles,
             "sreAppInsightsResourceId": connectors_config.get("appInsightsResourceId", ""),
             "sreAppInsightsAppId": connectors_config.get("appInsightsAppId", ""),
-            "sreLogAnalyticsWorkspaceId": connectors_config.get("lawResourceId", ""),
+            "sreLogAnalyticsWorkspaceId": env_or_config("LOG_ANALYTICS_WORKSPACE_RESOURCE_ID", env_or_config("APP_LOG_ANALYTICS_WORKSPACE_ID", connectors_config.get("lawResourceId", ""))) or infer_app_log_analytics_workspace_id(),
             "sreAzureMonitorScope": connectors_config.get("azureMonitorScope", ""),
         },
     }
@@ -340,11 +421,15 @@ def build_extras(agent_config: dict[str, Any], connectors_config: dict[str, Any]
     agents_dir = PROJECT_DIR / content.get("agentsPath", "sre-config/agents")
     knowledge_dir = PROJECT_DIR / content.get("knowledgePath", "knowledge")
     incident_platforms_dir = PROJECT_DIR / content.get("incidentPlatformsPath", "sre-config/incident-platforms")
+    response_plans_dir = PROJECT_DIR / content.get("responsePlansPath", "sre-config/response-plans")
     expected_config_path = PROJECT_DIR / content.get("expectedConfigPath", "sre-config/expected-config.json")
     requested_agents = content.get("agents") or []
+    if not agt_governance_enabled():
+        requested_agents = [agent_name for agent_name in requested_agents if agent_name != "incident-handler-agt"]
     governance = resolve_governance(agent_config)
     replacements = connector_values(connectors_config)
     repos = build_repo_entries(connectors_config)
+    connectors = build_agent_connectors(connectors_config)
     expected_config = load_expected_config(expected_config_path)
     if repos:
         expected_config["repos"] = [repo["name"] for repo in repos]
@@ -365,11 +450,12 @@ def build_extras(agent_config: dict[str, Any], connectors_config: dict[str, Any]
             "generatedBy": "bin/assemble-agent.py",
         },
         "agent": agent_config,
-        "connectors": connectors_config.get("connectors", []),
+        "connectors": connectors,
         "connectorToggles": connectors_config.get("toggles") or {},
         "repos": repos,
         "knowledge": build_knowledge_entries(knowledge_dir),
         "incidentPlatforms": build_incident_platform_entries(incident_platforms_dir),
+        "responsePlans": build_response_plan_entries(response_plans_dir),
         "expectedConfig": expected_config,
         "skills": skills,
         "subagents": subagents,

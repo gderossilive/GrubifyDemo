@@ -47,6 +47,15 @@ param monthlyAgentUnitLimit int = 10000
 @description('Resource ID of the subnet delegated to Microsoft.App/environments for SRE Agent sandbox VNet integration. Leave empty to disable VNet integration.')
 param subnetResourceId string = ''
 
+@description('Code repositories allowed to bypass the firewall via the sandbox egress proxy. Leave empty for maximum lockdown.')
+param allowedCodeRepositories array = []
+
+@description('Package registries allowed to bypass the firewall via the sandbox egress proxy. Leave empty for maximum lockdown.')
+param allowedRegistries array = []
+
+@description('Additional hosts allowed to bypass the firewall via the sandbox egress proxy. Leave empty for maximum lockdown.')
+param allowedHosts array = []
+
 @description('Tags applied to all resources.')
 param tags object = {}
 
@@ -99,6 +108,19 @@ resource sreAgent 'Microsoft.App/agents@2025-05-01-preview' = {
   }, !empty(subnetResourceId) ? {
     vnetConfiguration: {
       subnetResourceId: subnetResourceId
+    }
+    sandboxConfiguration: {
+      egress: {
+        mode: 'AzureVNet'
+        vnetConfiguration: {
+          usePrivateDnsResolution: true
+        }
+        allowHttpMcpServerNetworkAccess: false
+        allowedCodeRepositories: allowedCodeRepositories
+        allowedRegistries: allowedRegistries
+        allowedHosts: allowedHosts
+      }
+      packages: []
     }
   } : {})
 }

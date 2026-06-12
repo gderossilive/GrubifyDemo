@@ -29,6 +29,9 @@
     "sreGithubPatSecretName": {
       "value": "${SRE_GITHUB_PAT_SECRET_NAME=GH-PAT}"
     },
+    "enableAgtGovernance": {
+      "value": "${ENABLE_AGT_GOVERNANCE=true}"
+    },
     "sreAgentExistingSubnetResourceId": {
       "value": "${EXISTING_SRE_AGENT_SUBNET_RESOURCE_ID}"
     },
