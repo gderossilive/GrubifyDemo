@@ -1,21 +1,160 @@
-# Grubify - Food Delivery App
+# Grubify – Food Delivery App
 
-A modern food delivery application built with React TypeScript frontend and .NET backend, designed for deployment to Azure Container Apps using Azure Developer CLI (azd).
+A modern food delivery application built with React TypeScript frontend and .NET backend, designed for deployment to Azure Container Apps using Azure Developer CLI (azd). Grubify also serves as the demo application for **Azure SRE Agent** scenarios (incident detection, remediation, issue triage).
 
 ## 🍕 Features
 
-- **Modern UI**: Beautiful, responsive design inspired by popular food delivery apps
-- **Real Food Content**: Sample restaurants and food items with real images from Unsplash
-- **Complete Food Delivery Flow**: Browse restaurants → Add to cart → Checkout → Track orders
-- **Azure Container Apps**: Scalable, serverless container hosting
-- **Azure Developer CLI**: One-command deployment and management
+- **Modern UI** – Responsive design with Material-UI, inspired by popular food delivery apps
+- **Complete Delivery Flow** – Browse restaurants → View menu → Add to cart → Checkout → Track orders
+- **Real Food Content** – Sample restaurants and food items with Unsplash images
+- **Azure Container Apps** – Scalable, serverless container hosting
+- **Azure Developer CLI** – One-command deployment and management (`azd up`)
+- **SRE Agent Integration** – Incident handling, issue triage, and deployment management demos
 
 ## 🏗️ Architecture
 
-- **Frontend**: React 19 + TypeScript + Material-UI
-- **Backend**: .NET 9 Web API with RESTful endpoints
-- **Infrastructure**: Azure Container Apps + Azure Container Registry (ACR)
-- **Deployment**: Azure Developer CLI (azd) with remote ACR builds — no local Docker required
+```
+┌─────────────────────┐       ┌────────────────────────┐
+│   React 19 Frontend │──────▶│  .NET 9 Web API        │
+│   (TypeScript + MUI)│  HTTP │  (In-memory data store) │
+│   nginx / port 80   │       │  Kestrel / port 8080    │
+└─────────────────────┘       └────────────────────────┘
+        │                              │
+        ▼                              ▼
+ Azure Container App            Azure Container App
+ ca-grubify-frontend-*          ca-grubify-api-*
+        │                              │
+        └──────────┬───────────────────┘
+                   ▼
+           Azure Container Registry (ACR)
+           Remote builds via ACR Tasks
+```
+
+| Layer | Technology |
+|---|---|
+| **Frontend** | React 19 + TypeScript + Material-UI v7 + React Router v6 |
+| **Backend** | .NET 9 Web API with Controllers |
+| **Data** | In-memory (no database – hardcoded sample data, resets on restart) |
+| **Infrastructure** | Azure Container Apps + ACR + Application Insights + Log Analytics |
+| **IaC** | Bicep templates in `infra/` |
+| **Deployment** | Azure Developer CLI (azd) with remote ACR builds – no local Docker required |
+| **SRE** | Azure SRE Agent with ServiceNow incident platform, governance function, knowledge base |
+
+## 📁 Project Structure
+
+```
+GrubifyDemo/
+├── GrubifyApi/                   # .NET 9 backend
+│   ├── Controllers/              # REST API controllers
+│   │   ├── RestaurantsController.cs
+│   │   ├── FoodItemsController.cs
+│   │   ├── CartController.cs
+│   │   └── OrdersController.cs
+│   ├── Models/                   # Domain models
+│   ├── Program.cs                # App configuration & CORS
+│   └── Dockerfile
+├── grubify-frontend/             # React 19 frontend
+│   ├── src/
+│   │   ├── components/           # Reusable UI components (Navbar)
+│   │   ├── pages/                # Route pages (Home, Restaurant, Cart, Checkout, OrderTracking)
+│   │   ├── services/             # API client (Axios)
+│   │   └── types/                # TypeScript interfaces
+│   ├── nginx.conf                # Production static serving
+│   └── Dockerfile
+├── infra/                        # Bicep infrastructure templates
+│   ├── main.bicep                # Top-level orchestrator (subscription scope)
+│   └── core/host/                # Container Apps, ACR, SRE Agent, Key Vault, etc.
+├── sre-config/                   # SRE Agent configuration
+│   ├── agents/                   # Sub-agent definitions & instructions
+│   ├── governance/function_app/  # AGT governance Azure Function (Python)
+│   ├── incident-platforms/       # Incident routing config
+│   ├── response-plans/           # Incident response filters
+│   └── hooks/                    # SRE Agent hook definitions
+├── knowledge/                    # SRE Agent knowledge base (Markdown)
+├── scripts/                      # Deployment & prerequisite scripts
+├── bin/                          # Agent assembly & extras scripts (Python)
+├── agent.json                    # SRE Agent identity & content config
+├── connectors.json               # SRE Agent connector toggles
+├── azure.yaml                    # azd service definitions
+└── .env.template                 # Environment variable template
+```
+
+## 🔌 API Endpoints
+
+### Restaurants – `/api/restaurants`
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/restaurants` | List all restaurants |
+| `GET` | `/api/restaurants/{id}` | Get restaurant by ID |
+| `GET` | `/api/restaurants/cuisine/{cuisineType}` | Filter by cuisine type |
+| `GET` | `/api/restaurants/search?query={q}` | Search restaurants by name |
+
+### Food Items – `/api/fooditems`
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/fooditems` | List all food items |
+| `GET` | `/api/fooditems/{id}` | Get item by ID |
+| `GET` | `/api/fooditems/restaurant/{restaurantId}` | Items for a restaurant |
+| `GET` | `/api/fooditems/category/{category}` | Filter by category |
+| `GET` | `/api/fooditems/search?query={q}` | Search food items |
+| `GET` | `/api/fooditems/dietary?isVegetarian=&isVegan=&isSpicy=` | Dietary filters |
+
+### Cart – `/api/cart`
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/cart/{userId}` | Get user's cart |
+| `POST` | `/api/cart/{userId}/items` | Add item to cart |
+| `PUT` | `/api/cart/{userId}/items/{itemId}` | Update cart item quantity |
+| `DELETE` | `/api/cart/{userId}/items/{itemId}` | Remove item from cart |
+| `DELETE` | `/api/cart/{userId}` | Clear cart |
+
+### Orders – `/api/orders`
+
+| Method | Route | Description |
+|---|---|---|
+| `POST` | `/api/orders` | Place a new order |
+| `GET` | `/api/orders/{id}` | Get order by ID |
+| `GET` | `/api/orders/user/{userId}` | Get user's orders |
+| `GET` | `/api/orders/user/{userId}/active` | Get user's active orders |
+| `PUT` | `/api/orders/{id}/cancel` | Cancel an order |
+| `PUT` | `/api/orders/{id}/status` | Update order status |
+
+> **SRE Demo Note:** The cart endpoint contains an intentional memory leak (`RequestDataCache` grows unbounded). The orders endpoint switches between v1 (working) and v2 (broken payment gateway URL) based on the `API_VERSION` environment variable. These bugs power the SRE Agent incident scenarios.
+
+## 💻 Local Development
+
+### Prerequisites
+
+- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [Node.js 18+](https://nodejs.org/) and npm
+
+### Run the Backend
+
+```bash
+cd GrubifyApi
+dotnet run
+# API available at http://localhost:5291
+# Swagger UI at http://localhost:5291/swagger
+```
+
+### Run the Frontend
+
+```bash
+cd grubify-frontend
+npm install
+npm start
+# Opens at http://localhost:3000 — proxies API calls to http://localhost:5291
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `REACT_APP_API_BASE_URL` | `http://localhost:5291/api` | Backend API URL (frontend) |
+| `API_VERSION` | `v1` | `v1` = working, `v2` = broken payment gateway (backend) |
 
 ## 🚀 Complete Deployment Guide
 
