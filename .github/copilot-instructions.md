@@ -26,21 +26,37 @@ This is a modern food delivery application with a React TypeScript frontend and 
 - Use async/await for API calls
 - Follow RESTful conventions for API endpoints
 
+## Data Storage
+- **In-memory only** — no database. Hardcoded sample restaurants and food items. Carts and orders stored in static dictionaries (reset on restart).
+
 ## API Endpoints
-- `/api/restaurants` - Restaurant management
-- `/api/fooditems` - Food item management  
-- `/api/cart` - Shopping cart operations
-- `/api/orders` - Order management
+- `/api/restaurants` — List, get by ID, filter by cuisine, search
+- `/api/fooditems` — List, get by ID, filter by restaurant/category/dietary, search
+- `/api/cart/{userId}` — Get cart, add/update/remove items, clear
+- `/api/orders` — Place order, get by ID/user, active orders, cancel, update status
+
+## Frontend Pages & Routes
+- `/` — HomePage (browse restaurants, cuisine filters, search)
+- `/restaurant/:id` — RestaurantPage (menu items, add-to-cart dialog)
+- `/cart` — CartPage (review items, quantities, totals)
+- `/checkout` — CheckoutPage (multi-step: address → payment → review)
+- `/order-tracking/:orderId` — OrderTrackingPage (status stepper)
 
 ## UI Components
-- Modern, responsive design inspired by popular food delivery apps
+- **Navbar** — Logo, search bar, sign-in button, cart badge
 - Card-based layouts for restaurants and food items
-- Step-by-step checkout process
-- Real-time order tracking
+- Step-by-step checkout process with Material-UI Stepper
+- Order tracking with visual status progression
+
+## SRE Demo Context
+- **Cart endpoint** has an intentional memory leak (`RequestDataCache` grows unbounded) for incident demos
+- **Orders endpoint** switches between v1 (working) and v2 (broken payment gateway) via `API_VERSION` env var
+- `WeatherForecastController.cs` is unused template code — ignore it
 
 ## Deployment
 - Region: `swedencentral` (required for SRE Agent preview)
 - Run `azd up` to provision infrastructure and deploy — no Docker Desktop needed
 - See `azure.yaml` for service definitions and `infra/` for Bicep templates
+- Three azd services: `api` (Container App), `frontend` (Container App), `governance` (Function App)
 
 When working on this project, prioritize user experience, maintain clean code architecture, and ensure proper error handling throughout the application.

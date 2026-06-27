@@ -9,6 +9,34 @@ React 19 + TypeScript frontend for the Grubify food delivery app, built with Mat
 - React Router v6
 - Axios for API calls
 
+## Pages & Routes
+
+| Route | Component | Description |
+|---|---|---|
+| `/` | `HomePage` | Browse restaurants with cuisine filters and search |
+| `/restaurant/:id` | `RestaurantPage` | View menu, add items to cart via dialog |
+| `/cart` | `CartPage` | Review cart items, update quantities, proceed to checkout |
+| `/checkout` | `CheckoutPage` | Multi-step: delivery address → payment → review & place order |
+| `/order-tracking/:orderId` | `OrderTrackingPage` | Visual order status stepper |
+
+## Components
+
+| Component | Description |
+|---|---|
+| `Navbar` | App header with logo, search bar, sign-in button, and cart badge |
+
+## Project Structure
+
+```
+src/
+├── components/    # Reusable UI components (Navbar)
+├── pages/         # Route-level page components
+├── services/      # API client (Axios instance + service objects)
+├── types/         # TypeScript interfaces and enums
+├── App.tsx        # Theme, routing, layout
+└── index.tsx      # Entry point
+```
+
 ## Local Development
 
 ```bash
