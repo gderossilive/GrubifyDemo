@@ -1,18 +1,15 @@
 ---
 name: grubify-incident
 description: >
-  Run the Grubify Incident demo (Act 1: IT Operations). Triggers a memory leak in the Grubify
-  container app, then observes the SRE Agent autonomously detect the HTTP 5xx alert, diagnose
-  OOM as root cause, and remediate. USE FOR: break grubify app, trigger memory leak, run incident
-  demo, Demo4, OOM simulation, SRE Agent remediation demo. DO NOT USE FOR: issue triage
-  (use grubify-issue-triage), deploying grubify (use azd up), GitHub integration.
+  Retired cart-memory-leak incident demo. The cart endpoint no longer retains request buffers,
+  so this skill must not be used to generate an OOM or HTTP 5xx incident. USE FOR: verifying that
+  the retired scenario is not run. DO NOT USE FOR: triggering memory pressure, issue triage,
+  deployment, or GitHub integration.
 ---
 
-# Grubify Incident — Demo Skill
+# Grubify Incident — Retired Cart OOM Scenario
 
-Run **Act 1: IT Operations** for the GrubifyIncidentLab demo. Trigger a memory leak in Grubify,
-then watch the SRE Agent autonomously detect the HTTP 5xx alert, diagnose OOM as root cause,
-and remediate.
+The cart memory-leak scenario was retired after the permanent fix removed the unbounded request-buffer cache. Do not send a cart POST flood or expect an OOM/HTTP 5xx alert from the cart endpoint.
 
 ## Working directory
 
@@ -69,70 +66,26 @@ az logic workflow show -g "$SRE_RG" -n "$LOGIC_APP" \
 
 The alert must be enabled and the Logic App must be enabled/succeeded.
 
-## Step 3: Trigger the memory leak
+## Retired procedure
+
+Do not run the former 200-request cart POST flood. It was designed to exercise the removed 10 MiB-per-request cache and will no longer create memory pressure, an OOM, or an HTTP 5xx alert.
+
+## Validation after deployment
+
+Use a normal cart write and read to verify the fixed endpoint:
 
 ```bash
-url="${APP_URL}/api/cart/demo-user/items"
-body='{"foodItemId":1,"quantity":1,"specialInstructions":"demo memory pressure"}'
-for i in $(seq 1 200); do
-  curl -s -o /dev/null -w "%{http_code}\n" \
-    -X POST -H "Content-Type: application/json" -d "$body" "$url"
-done | sort | uniq -c
+curl -s -o /dev/null -w "Cart add: HTTP %{http_code}\n" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"foodItemId":1,"quantity":1}' \
+  "${APP_URL}/api/cart/demo-user/items"
+curl -s -o /dev/null -w "Cart read: HTTP %{http_code}\n" \
+  "${APP_URL}/api/cart/demo-user"
 ```
 
-This sends 200 rapid POST requests to `/api/cart/demo-user/items`, retaining about 10 MB per
-request in the API process. The burst may initially return HTTP 200 while memory pressure and
-Azure Monitor metrics catch up; the important signal is the request spike followed by HTTP 5xx,
-container restart, or degraded behavior during the alert evaluation window.
-
-## Step 4: Wait for alert + agent investigation
-
-- Wait **5-8 minutes** for memory pressure to build and Azure Monitor to fire the HTTP 5xx alert.
-- Azure Monitor calls the action group's Logic App receiver. The Logic App creates a ServiceNow incident and acknowledges the Azure Monitor alert.
-- Direct the user to open ServiceNow and https://sre.azure.com → **Incidents** to watch the ServiceNow-backed investigation.
-
-### What the agent does autonomously
-
-1. Queries container logs for error patterns using KQL
-2. Checks memory/CPU metrics via Azure Monitor
-3. Searches the knowledge base for the HTTP 500 runbook
-4. Identifies OOM / memory leak as root cause
-5. Executes remediation (restart or scale the container)
-6. Generates Python charts as evidence
-7. Stores findings in memory for future incident correlation
-8. Updates the ServiceNow incident throughout the lifecycle
-
-## Step 5: Verify recovery
-
-After the agent remediates:
-
-```bash
-APP_URL="https://$(az containerapp show -g "$APP_RG" -n "$API_CA" --query properties.configuration.ingress.fqdn -o tsv)"
-curl -s -o /dev/null -w "Restaurants: HTTP %{http_code}\n" "${APP_URL}/api/restaurants"
-```
-
-Should return HTTP 200.
-
-## Reset (if needed)
-
-To manually reset the demo without waiting for the agent, restart the active revision:
-
-```bash
-RG="$APP_RG"
-CA_NAME="$API_CA"
-REVISION=$(az containerapp revision list -g "$RG" -n "$CA_NAME" --query '[0].name' -o tsv)
-az containerapp revision restart -g "$RG" -n "$CA_NAME" --revision "$REVISION"
-```
-
-## Success criteria
-
-- [ ] The cart POST burst creates a request/memory-pressure spike
-- [ ] Logic App creates a ServiceNow incident
-- [ ] SRE Agent portal shows an incident being investigated
-- [ ] Agent identifies memory leak / OOM as root cause
-- [ ] Container app recovers (HTTP 200 on API endpoints)
+Both requests should return HTTP 200 without a restart or an alert.
 
 ## Constraints
 
-- Do not manually restart the container — let the agent remediate
-- This demo does not require GitHub integration
+- Do not use the cart endpoint for intentional memory-pressure testing.
+- This retired scenario does not require GitHub integration.

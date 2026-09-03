@@ -121,12 +121,12 @@ graph LR
 | ID | Type | Name | File | Notes | Observability |
 |---|---|---|---|---|---|
 | `frontend__React` | frontend | React SPA | `grubify-frontend/src/` | React 19 + MUI + axios; served via nginx on Container App (port 80) | [Metrics ↗](#metric-requests) · [Traces ↗](#trace-frontend) |
-| `api__Cart` | api | CartController | `GrubifyApi/Controllers/CartController.cs` | GET/POST/PUT/DELETE `/api/cart/{userId}[/items/{itemId}]`; **memory leak** in `POST /items` | [Metrics ↗](#metric-requests) · [Metrics ↗](#metric-memory-cpu) · [Traces ↗](#trace-cart-post-items) · [Logging ↗](#log-cart-post-items) |
+| `api__Cart` | api | CartController | `GrubifyApi/Controllers/CartController.cs` | GET/POST/PUT/DELETE `/api/cart/{userId}[/items/{itemId}]`; no request-buffer cache | [Metrics ↗](#metric-requests) · [Metrics ↗](#metric-memory-cpu) · [Traces ↗](#trace-cart-post-items) · [Logging ↗](#log-cart-post-items) |
 | `api__FoodItems` | api | FoodItemsController | `GrubifyApi/Controllers/FoodItemsController.cs` | GET `/api/fooditems[/{id}]`, `/restaurant/{id}`, `/category/{c}`, `/search`, `/dietary` | [Metrics ↗](#metric-requests) · [Traces ↗](#trace-fooditems-get) · [Logging ↗](#log-all-endpoints) |
 | `api__Orders` | api | OrdersController | `GrubifyApi/Controllers/OrdersController.cs` | POST/GET `/api/orders`; v1/v2 payment-gateway fault mode via `API_VERSION` env var | [Metrics ↗](#metric-requests) · [Traces ↗](#trace-orders-post) · [Logging ↗](#log-orders-post) |
 | `api__Restaurants` | api | RestaurantsController | `GrubifyApi/Controllers/RestaurantsController.cs` | GET `/api/restaurants[/{id}]`, `/cuisine/{type}`, `/search` | [Metrics ↗](#metric-requests) · [Traces ↗](#trace-restaurants-get) · [Logging ↗](#log-all-endpoints) |
 | `api__WeatherForecast` | api | WeatherForecastController | `GrubifyApi/Controllers/WeatherForecastController.cs` | GET `/weatherforecast`; test/scaffold endpoint only | [Metrics ↗](#metric-requests) · [Traces ↗](#trace-weather-get) · [Logging ↗](#log-weather-get) |
-| `entity__Cart` | entity | Cart / CartItem | `GrubifyApi/Models/Cart.cs` | Held in `CartController.UserCarts` (static `Dictionary<string,Cart>`); never evicted; 10 MB buffer added per POST | [Metrics ↗](#metric-memory-cpu) · [Traces ↗](#trace-cart-post-items) · [Logging ↗](#log-cart-post-items) |
+| `entity__Cart` | entity | Cart / CartItem | `GrubifyApi/Models/Cart.cs` | Held in `CartController.UserCarts` (static `Dictionary<string,Cart>`); reset on restart; no per-request binary buffer | [Metrics ↗](#metric-memory-cpu) · [Traces ↗](#trace-cart-post-items) · [Logging ↗](#log-cart-post-items) |
 | `entity__FoodItem` | entity | FoodItem | `GrubifyApi/Models/FoodItem.cs` | Static list in `FoodItemsController.FoodItems`; fields: Id, Name, Price, Category, RestaurantId, etc. | — |
 | `entity__Order` | entity | Order | `GrubifyApi/Models/Order.cs` | Static list in `OrdersController.Orders`; status enum: Placed→Delivered/Cancelled | — |
 | `entity__Restaurant` | entity | Restaurant | `GrubifyApi/Models/Restaurant.cs` | Static list in `RestaurantsController.Restaurants`; fields: Id, Name, CuisineType, Rating, etc. | — |
@@ -227,9 +227,8 @@ These are the built-in fault modes used in the SRE Agent demo. Document them her
 
 | Fault | Trigger | Symptom |
 |---|---|---|
-| **Memory leak** | Rapid `POST /api/cart/{userId}/items` calls | Each call allocates a 10 MB `byte[]` into `RequestDataCache` (never freed); container OOM kill → restart → HTTP 503 |
 | **Payment failure (v2)** | Set `API_VERSION=v2` env var on the Container App | `POST /api/orders` always returns `HTTP 500 PAYMENT_ERROR`; gateway URL points to non-existent staging host |
-| **Data loss on restart** | Any container restart (OOM or manual) | All in-memory carts and orders are lost; clients see empty state |
+| **Data loss on restart** | Any container restart | All in-memory carts and orders are lost; clients see empty state |
 
 ---
 

@@ -1,8 +1,8 @@
 # Grubify Post-Deploy Tests Runbook
 
 This runbook documents how the `tests-manager` SRE Agent subagent runs
-controlled post-deploy validation tests and the cart load trigger that
-intentionally exercises the memory-leak path in
+controlled post-deploy validation tests. The former cart load trigger was
+retired with the removal of the request-buffer memory leak from
 `GrubifyApi/Controllers/CartController.cs`.
 
 `tests-manager` is invoked AFTER `deployment-manager` confirms a healthy
@@ -11,8 +11,7 @@ baseline. It never deploys code or mutates infrastructure.
 ## When to use
 
 Use this runbook for any post-deploy validation in the Grubify demo
-environment. The cart load trigger section is only used for the
-`cart-leak-baseline` Step 0 demo flow.
+environment. Do not use cart traffic as an intentional memory-pressure trigger.
 
 ## Required inputs
 
