@@ -122,7 +122,7 @@ GrubifyDemo/
 | `PUT` | `/api/orders/{id}/cancel` | Cancel an order |
 | `PUT` | `/api/orders/{id}/status` | Update order status |
 
-> **SRE Demo Note:** The cart endpoint contains an intentional memory leak (`RequestDataCache` grows unbounded). The orders endpoint switches between v1 (working) and v2 (broken payment gateway URL) based on the `API_VERSION` environment variable. These bugs power the SRE Agent incident scenarios.
+> **SRE Demo Note:** The cart endpoint no longer retains request buffers. Carts remain in-memory and reset on restart. The orders endpoint switches between v1 (working) and v2 (broken payment gateway URL) based on the `API_VERSION` environment variable for the remaining SRE incident scenario.
 
 ## 💻 Local Development
 

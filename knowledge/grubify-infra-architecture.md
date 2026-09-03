@@ -343,40 +343,11 @@ Notes:
 
 ---
 
-## Actual Failure Mode Used By The Demo
+## Cart Memory-Leak Remediation
 
-The intentional incident is implemented in `GrubifyApi/Controllers/CartController.cs`.
+`GrubifyApi/Controllers/CartController.cs` no longer allocates or retains a 10 MiB request buffer for each `POST /api/cart/{userId}/items` call. The former `RequestDataCache` OOM scenario and its 200-request trigger are retired.
 
-The `POST /api/cart/{userId}/items` handler does two things that matter for the incident:
-
-1. It stores carts in a static in-memory dictionary: `UserCarts`.
-2. It allocates a new `10 MB` byte array for every request and appends it to the static `RequestDataCache` list.
-
-That second behavior is the direct memory leak in the current code:
-
-- `var requestData = new byte[10 * 1024 * 1024];`
-- `RequestDataCache.Add(requestData);`
-
-Under repeated calls to `/api/cart/demo-user/items`, memory grows without cleanup until the container approaches its `1Gi` memory limit. The observed symptom becomes HTTP 5xx responses and potentially container restarts.
-
-### Trigger Mechanism
-
-The incident demo repeatedly calls:
-
-```bash
-POST /api/cart/demo-user/items
-```
-
-with a JSON body like:
-
-```json
-{"foodItemId":1,"quantity":1}
-```
-
-The script defaults to:
-
-- `200` requests
-- `0.5` seconds between requests
+Cart data remains in process memory in `UserCarts` and is reset on restart; this is a durability limitation, not the removed per-request OOM behavior.
 
 ---
 

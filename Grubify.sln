@@ -1,19 +1,46 @@
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrubifyApi", "GrubifyApi\GrubifyApi.csproj", "{567244B3-6FEF-9706-4186-6C616AD1138E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrubifyApi.Tests", "GrubifyApi.Tests\GrubifyApi.Tests.csproj", "{DAC88E75-253D-46DA-B32D-6C931D2E3F01}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
 		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{567244B3-6FEF-9706-4186-6C616AD1138E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{567244B3-6FEF-9706-4186-6C616AD1138E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Debug|x64.Build.0 = Debug|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Debug|x86.Build.0 = Debug|Any CPU
 		{567244B3-6FEF-9706-4186-6C616AD1138E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{567244B3-6FEF-9706-4186-6C616AD1138E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Release|x64.ActiveCfg = Release|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Release|x64.Build.0 = Release|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Release|x86.ActiveCfg = Release|Any CPU
+		{567244B3-6FEF-9706-4186-6C616AD1138E}.Release|x86.Build.0 = Release|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Debug|x64.Build.0 = Debug|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Debug|x86.Build.0 = Debug|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Release|x64.ActiveCfg = Release|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Release|x64.Build.0 = Release|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Release|x86.ActiveCfg = Release|Any CPU
+		{DAC88E75-253D-46DA-B32D-6C931D2E3F01}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

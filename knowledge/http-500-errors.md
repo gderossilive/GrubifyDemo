@@ -50,20 +50,11 @@ The demo deploys one primary alert for this scenario:
 - Severity: `2`
 - Alert name: `alert-http-5xx-grubify`
 
-### Most Likely Root Cause In This Lab
+### Cart OOM Remediation
 
-The primary intentional failure path is in:
+`GrubifyApi/Controllers/CartController.cs` no longer allocates or retains request buffers in `POST /api/cart/{userId}/items`. A cart request burst must not be treated as an expected OOM trigger.
 
-- `GrubifyApi/Controllers/CartController.cs`
-
-The `POST /api/cart/{userId}/items` endpoint allocates and retains a new `10 MB` byte array on every request:
-
-```csharp
-var requestData = new byte[10 * 1024 * 1024];
-RequestDataCache.Add(requestData);
-```
-
-Repeated requests to `/api/cart/demo-user/items` cause steady memory growth until the API starts returning HTTP 5xx and may restart under memory pressure.
+If this endpoint returns HTTP 5xx, investigate the current request payload, application logs, and runtime configuration rather than assuming the retired `RequestDataCache` failure mode.
 
 ### Important Endpoint Notes
 
@@ -139,7 +130,7 @@ curl -i -X POST "$APP_URL/api/cart/demo-user/items" \
 
 Interpretation:
 
-- If `restaurants` and `fooditems` are still `200` but `cart` is failing, suspect the intentional memory leak path first.
+- If `restaurants` and `fooditems` are still `200` but `cart` is failing, correlate the cart request with current application logs and payload validation.
 - If all endpoints fail, check for app restart loops, revision issues, or broad resource exhaustion.
 
 ---

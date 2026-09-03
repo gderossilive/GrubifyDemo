@@ -49,7 +49,7 @@ This is a modern food delivery application with a React TypeScript frontend and 
 - Order tracking with visual status progression
 
 ## SRE Demo Context
-- **Cart endpoint** has an intentional memory leak (`RequestDataCache` grows unbounded) for incident demos
+- **Cart endpoint** no longer retains request buffers; carts remain in-memory and reset on restart
 - **Orders endpoint** switches between v1 (working) and v2 (broken payment gateway) via `API_VERSION` env var
 - `WeatherForecastController.cs` is unused template code — ignore it
 
